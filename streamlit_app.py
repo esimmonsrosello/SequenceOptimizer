@@ -877,36 +877,107 @@ def validate_dna_sequence(sequence):
     return True, cleaned, ""
 
 @st.cache_data
-def load_codon_data_from_file(file_content):
-    """Load codon usage data from uploaded file"""
+def load_immunogenic_peptides(file_path="epitope_table_export.xlsx"):
+    """Load immunogenic peptides from Excel file"""
     try:
-        df = pd.read_excel(io.BytesIO(file_content))
-        df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_")
-        required_columns = ['triplet', 'amino_acid', 'fraction']
-        missing_columns = [col for col in required_columns if col not in df.columns]
-        if missing_columns:
-            raise ValueError(f"Missing required columns: {missing_columns}")
-        
-        df['triplet'] = df['triplet'].str.upper().str.strip()
-        df['amino_acid'] = df['amino_acid'].str.upper().str.strip().replace({'*': 'X'})
-        df = df.dropna(subset=['triplet', 'amino_acid', 'fraction'])
-        
-        genetic_code = df.set_index('triplet')['amino_acid'].to_dict()
-        max_fraction = df.groupby('amino_acid')['fraction'].transform('max')
-        df['weight'] = df['fraction'] / max_fraction
-        codon_weights = df.set_index('triplet')['weight'].to_dict()
-        preferred_codons = df.sort_values('fraction', ascending=False).drop_duplicates('amino_acid').set_index('amino_acid')['triplet'].to_dict()
-        human_codon_usage = df.set_index('triplet')['fraction'].to_dict()
-        
-        aa_to_codons = defaultdict(list)
-        for codon_val, freq in human_codon_usage.items():
-            aa = genetic_code.get(codon_val, None)
-            if aa and aa != 'X':
-                aa_to_codons[aa].append((codon_val, freq))
-        
-        return genetic_code, codon_weights, preferred_codons, human_codon_usage, aa_to_codons, df
+        if os.path.exists(file_path):
+            df = pd.read_excel(file_path)
+            
+            # Specifically look for the 'Name' column which contains the epitope sequences
+            if 'Name' not in df.columns:
+                st.error(f"'Name' column not found in {file_path}. Available columns: {list(df.columns)}")
+                return pd.DataFrame()
+            
+            # Clean and prepare the data - focus only on the Name column
+            df_clean = df.dropna(subset=['Name'])
+            df_clean = df_clean[df_clean['Name'].notna()]  # Extra check for NaN values
+            df_clean['Name'] = df_clean['Name'].astype(str).str.upper().str.strip()
+            
+            # Filter out very short sequences (less than 3 amino acids) and invalid entries
+            df_clean = df_clean[df_clean['Name'].str.len() >= 3]
+            df_clean = df_clean[df_clean['Name'] != 'NAN']
+            df_clean = df_clean[df_clean['Name'] != '']
+            
+            # Keep all original columns for additional context
+            result_df = df_clean.copy()
+            
+            st.success(f"Loaded {len(result_df)} immunogenic peptides from {file_path}")
+            
+            # Show a sample of the epitopes for verification
+            if len(result_df) > 0:
+                st.write("**Sample epitopes loaded from 'Name' column:**")
+                sample_epitopes = result_df['Name'].head(10).tolist()
+                for i, epitope in enumerate(sample_epitopes, 1):
+                    st.write(f"{i}. {epitope}")
+                
+                # Show some statistics
+                st.write(f"**Epitope length range:** {result_df['Name'].str.len().min()} - {result_df['Name'].str.len().max()} amino acids")
+                st.write(f"**Most common epitope length:** {result_df['Name'].str.len().mode().iloc[0]} amino acids")
+            
+            return result_df
+        else:
+            st.warning(f"Epitope file {file_path} not found. Immunogenic peptide scanning disabled.")
+            return pd.DataFrame()
     except Exception as e:
-        raise Exception(f"Error loading codon file: {e}")
+        st.error(f"Error loading epitope file {file_path}: {str(e)}")
+        return pd.DataFrame()
+
+def scan_for_immunogenic_peptides(protein_sequence, epitope_df, frame_name):
+    """Scan protein sequence for immunogenic peptides using only the 'Name' column"""
+    findings = []
+    
+    if epitope_df.empty:
+        return findings
+    
+    # Use only the 'Name' column for epitope sequences
+    if 'Name' not in epitope_df.columns:
+        st.error("'Name' column not found in epitope data")
+        return findings
+    
+    protein_upper = protein_sequence.upper()
+    
+    for idx, row in epitope_df.iterrows():
+        try:
+            epitope = str(row['Name']).upper().strip()
+            
+            # Skip invalid entries
+            if pd.isna(epitope) or epitope == 'NAN' or epitope == '' or len(epitope) < 3:
+                continue
+                
+            # Find all occurrences of this epitope in the protein sequence
+            start = 0
+            while True:
+                pos = protein_upper.find(epitope, start)
+                if pos == -1:
+                    break
+                
+                finding = {
+                    'epitope': epitope,
+                    'position': pos + 1,  # 1-based position
+                    'length': len(epitope),
+                    'frame': frame_name,
+                    'end_position': pos + len(epitope)
+                }
+                
+                # Add additional information from other columns if available
+                if 'IEDB IRI' in row and pd.notna(row['IEDB IRI']):
+                    finding['iedb_iri'] = row['IEDB IRI']
+                if 'Object Type' in row and pd.notna(row['Object Type']):
+                    finding['object_type'] = row['Object Type']
+                if 'Source Organism' in row and pd.notna(row['Source Organism']):
+                    finding['source_organism'] = row['Source Organism']
+                if 'Species' in row and pd.notna(row['Species']):
+                    finding['species'] = row['Species']
+                if 'Source Molecule' in row and pd.notna(row['Source Molecule']):
+                    finding['source_molecule'] = row['Source Molecule']
+                
+                findings.append(finding)
+                start = pos + 1  # Look for overlapping occurrences
+                
+        except Exception as e:
+            continue  # Skip problematic rows
+    
+    return findings
 
 def calculate_gc_content(sequence):
     """Calculate GC content percentage of DNA sequence"""
@@ -3296,62 +3367,7 @@ def translate_frame(dna_sequence, frame_offset):
     except Exception as e:
         return ""
 
-def scan_for_immunogenic_peptides(protein_sequence, epitope_df, frame_name):
-    """Scan protein sequence for immunogenic peptides"""
-    findings = []
-    
-    if epitope_df.empty:
-        return findings
-    
-    # Get the peptide column name - prioritize 'Name' since that's what your file uses
-    possible_columns = ['Name', 'Epitope', 'Peptide', 'Sequence', 'epitope', 'peptide', 'sequence', 'name']
-    peptide_column = None
-    
-    for col in possible_columns:
-        if col in epitope_df.columns:
-            peptide_column = col
-            break
-    
-    if peptide_column is None:
-        return findings
-    
-    protein_upper = protein_sequence.upper()
-    
-    for idx, row in epitope_df.iterrows():
-        try:
-            epitope = str(row[peptide_column]).upper().strip()
-            
-            # Skip invalid entries
-            if pd.isna(epitope) or epitope == 'NAN' or len(epitope) < 3:
-                continue
-                
-            # Find all occurrences of this epitope
-            start = 0
-            while True:
-                pos = protein_upper.find(epitope, start)
-                if pos == -1:
-                    break
-                
-                finding = {
-                    'epitope': epitope,
-                    'position': pos + 1,  # 1-based position
-                    'length': len(epitope),
-                    'frame': frame_name,
-                    'end_position': pos + len(epitope)
-                }
-                
-                # Add additional information if available in the epitope file
-                for col in epitope_df.columns:
-                    if col != peptide_column and col in ['Epitope ID', 'IEDB IRI', 'Object Type', 'Starting Position', 'Ending Position']:
-                        finding[col.lower().replace(' ', '_')] = row[col] if pd.notna(row[col]) else ''
-                
-                findings.append(finding)
-                start = pos + 1  # Look for overlapping occurrences
-                
-        except Exception as e:
-            continue  # Skip problematic rows
-    
-    return findings
+
 
 def create_immunogenic_peptide_summary(findings_plus1, findings_minus1):
     """Create a summary of immunogenic peptide findings"""
