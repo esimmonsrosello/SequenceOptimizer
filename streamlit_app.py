@@ -3608,26 +3608,25 @@ def main():
                         df = pd.DataFrame(result)
                         st.subheader("In-Frame Analysis Results")
                         
-                        # Statistics including GC content
-                        col_stat1, col_stat2, col_stat3, col_stat4, col_stat5 = st.columns(5)
-                        with col_stat1:
-                            st.metric("Average CAI", f"{np.mean(cai_weights):.3f}")
-                        with col_stat2:
-                            st.metric("Min CAI", f"{np.min(cai_weights):.3f}")
-                        with col_stat3:
-                            st.metric("Max CAI", f"{np.max(cai_weights):.3f}")
-                        with col_stat4:
-                            low_cai_count = sum(1 for w in cai_weights if w < 0.5)
-                            st.metric("Low CAI (<0.5)", f"{low_cai_count}/{len(cai_weights)}")
-                        with col_stat5:
-                            # Calculate GC content from the original sequence
-                            gc_content = calculate_gc_content(sequence_input)
-                            st.metric("GC Content", f"{gc_content:.1f}%")
-                        
-                        
-                        
                         # Create interactive In-Frame graph with GC content
                         if not df.empty and 'CAI_Weight' in df.columns:
+                            # Statistics including GC content
+                            col_stat1, col_stat2, col_stat3, col_stat4, col_stat5 = st.columns(5)
+                            with col_stat1:
+                                st.metric("Average CAI", f"{np.mean(cai_weights):.3f}")
+                            with col_stat2:
+                                st.metric("Min CAI", f"{np.min(cai_weights):.3f}")
+                            with col_stat3:
+                                st.metric("Max CAI", f"{np.max(cai_weights):.3f}")
+                            with col_stat4:
+                                low_cai_count = sum(1 for w in cai_weights if w < 0.5)
+                                st.metric("Low CAI (<0.5)", f"{low_cai_count}/{len(cai_weights)}")
+                            with col_stat5:
+                                # Calculate GC content from the original sequence
+                                gc_content = calculate_gc_content(sequence_input)
+                                st.metric("GC Content", f"{gc_content:.1f}%")
+                            
+                            
                             st.subheader("📊 Interactive CAI Weights and 10bp GC Content")
                             
                             positions = df['Position'].tolist()
