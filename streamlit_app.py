@@ -30,7 +30,7 @@ from datetime import datetime
 
 # Configure page
 st.set_page_config(
-    page_title="Highly Optimized Reading-frame Sequence Engine for Synonymous codons",
+    page_title="Harmonized Optimization of Oligos and Frames",
     page_icon=":dna:",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -3226,7 +3226,7 @@ def main():
     if 'uniprot_engine' not in st.session_state:
         st.session_state.uniprot_engine = UniProtSearchEngine()
         
-    st.title("Highly Optimized Reading-frame Sequence Engine for Synonymous codons")
+    st.title("Harmonized Optimization of Oligos and Frames")
     st.markdown("DNA sequence optimization and analysis")
     
     # Sidebar for settings and configuration
