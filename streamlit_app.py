@@ -5946,10 +5946,46 @@ def main():
                     else:
                         st.info("ℹ️ Immunogenic peptide scanning disabled - epitope_table_export.xlsx not found")
 
-                    # Continue with existing CAI/GC analysis...
                     # Top row: CAI/GC and +1 Stop Pie Chart
                     col_chart1, col_chart2 = st.columns([3, 1])
-                    # ... rest of your existing code
+
+                    with col_chart1:
+                        st.markdown("##### CDS CAI and GC Content")
+                        cai_result, cai_error = run_single_optimization(full_cds, "In-Frame Analysis")
+                        if not cai_error and cai_result:
+                            cai_df = pd.DataFrame(cai_result)
+                            fig_cai_gc = create_interactive_cai_gc_plot(
+                                cai_df['Position'].tolist(),
+                                cai_df['CAI_Weight'].tolist(),
+                                cai_df['Amino_Acid'].tolist(),
+                                full_cds,
+                                "Processed CDS"
+                            )
+                            st.plotly_chart(fig_cai_gc, use_container_width=True)
+                        else:
+                            st.warning("Could not generate CAI/GC plot.")
+
+                    with col_chart2:
+                        st.markdown("##### CDS +1 Stop Codons")
+                        plus1_stops = number_of_plus1_stops(full_cds)
+                        if plus1_stops['total'] > 0:
+                            stop_labels = ['TAA', 'TAG', 'TGA']
+                            stop_values = [plus1_stops['TAA'], plus1_stops['TAG'], plus1_stops['TGA']]
+                            fig_pie = create_interactive_pie_chart(stop_values, stop_labels, "+1 Stop Codon Distribution")
+                            st.plotly_chart(fig_pie, use_container_width=True)
+                        else:
+                            st.info("No +1 stop codons found in the processed CDS.")
+
+                    # Bottom row: full-width visualization
+                    st.markdown("---")
+                    st.markdown("##### Final mRNA Visualisation")
+                    create_geneious_like_visualization(
+                        utr5_seq=JT_5_UTR, 
+                        cds_seq=main_cds_for_display,
+                        utr3_seq=JT_3_UTR, 
+                        signal_peptide_seq=dna_signal_peptide, 
+                        key_suffix="final_mrna"
+                    )
 
                             
     with tab7:
@@ -6328,6 +6364,49 @@ def main():
                         # CAI/GC Plot and +1 Stop Pie Chart
                         col_chart1, col_chart2 = st.columns([3, 1])
                         # ... rest of your existing code
+                        
+                        # CAI/GC Plot and +1 Stop Pie Chart
+                        col_chart1, col_chart2 = st.columns([3, 1])
+                        
+                        with col_chart1:
+                            st.markdown("##### CDS CAI and GC Content")
+                            # The CAI plot should analyze the full coding sequence (SP + main CDS)
+                            cai_result, cai_error = run_single_optimization(processed_cds, "In-Frame Analysis")
+                            if not cai_error and cai_result:
+                                cai_df = pd.DataFrame(cai_result)
+                                fig_cai_gc = create_interactive_cai_gc_plot(
+                                    cai_df['Position'].tolist(),
+                                    cai_df['CAI_Weight'].tolist(),
+                                    cai_df['Amino_Acid'].tolist(),
+                                    processed_cds,
+                                    "Processed CDS"
+                                )
+                                st.plotly_chart(fig_cai_gc, use_container_width=True)
+                            else:
+                                st.warning("Could not generate CAI/GC plot.")
+                        
+                            
+                        with col_chart2:
+                            st.markdown("##### CDS +1 Stop Codons")
+                            plus1_stops = number_of_plus1_stops(full_cds)
+                            if plus1_stops['total'] > 0:
+                                stop_labels = ['TAA', 'TAG', 'TGA']
+                                stop_values = [plus1_stops['TAA'], plus1_stops['TAG'], plus1_stops['TGA']]
+                                fig_pie = create_interactive_pie_chart(stop_values, stop_labels, "+1 Stop Codon Distribution")
+                                st.plotly_chart(fig_pie, use_container_width=True)
+                            else:
+                                st.info("No +1 stop codons found in the processed CDS.")
+
+                        # Bottom row: full-width visualization
+                        st.markdown("---")
+                        st.markdown("##### Final mRNA Visualisation")
+                        create_geneious_like_visualization(
+                                utr5_seq=JT_5_UTR,
+                                cds_seq=cds_with_stops[len(signal_peptide_dna):],
+                                utr3_seq=JT_3_UTR,
+                                signal_peptide_seq=signal_peptide_dna,
+                                key_suffix=f"cancer_vaccine_{id(cds_with_stops)}"  # Using a unique ID
+                            ) 
                     
 
 if __name__ == "__main__":
