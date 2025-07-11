@@ -3658,7 +3658,6 @@ def main():
                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                             )
                         
-                    # Find this section in your code and replace it:
                     elif optimization_method == "+1 Frame Analysis":
                         st.subheader("+1 Frame Analysis Results")
                         
@@ -5877,54 +5876,80 @@ def main():
 
                     # Step 5: Perform and display the final analysis
                     st.subheader("📊 Final Analysis")
-                    
+
                     # The context for frame analysis must include the 5' UTR to find the junctional ACCATG
                     analysis_context_sequence = JT_5_UTR + full_cds
-                    
+
                     # Detailed stats table (using the full, correct CDS)
                     summary_df = generate_detailed_mrna_summary(full_cds, final_mrna_sequence, JT_5_UTR, JT_3_UTR)
                     st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
+                    # ADD IMMUNOGENIC PEPTIDE SCANNING HERE
+                    epitope_df = load_immunogenic_peptides()
+
+                    if not epitope_df.empty:
+                        st.subheader("🔬 Immunogenic Peptide Scanning (mRNA Design)")
+                        
+                        # Translate +1 and -1 frames of the full CDS
+                        plus1_protein = translate_frame(full_cds, 1)  # +1 frame
+                        minus1_protein = translate_frame(full_cds, 2)  # -1 frame (offset by 2 to get -1)
+                        
+                        # Scan for immunogenic peptides
+                        plus1_findings = scan_for_immunogenic_peptides(plus1_protein, epitope_df, "+1 Frame")
+                        minus1_findings = scan_for_immunogenic_peptides(minus1_protein, epitope_df, "-1 Frame")
+                        
+                        total_findings = len(plus1_findings) + len(minus1_findings)
+                        
+                        # Display summary metrics
+                        scan_col1, scan_col2, scan_col3, scan_col4 = st.columns(4)
+                        with scan_col1:
+                            st.metric("Epitopes in +1 Frame", len(plus1_findings))
+                        with scan_col2:
+                            st.metric("Epitopes in -1 Frame", len(minus1_findings))
+                        with scan_col3:
+                            st.metric("Total Epitopes Found", total_findings)
+                        with scan_col4:
+                            st.metric("Epitopes in Database", len(epitope_df))
+                        
+                        if total_findings > 0:
+                            st.warning(f"⚠️ **mRNA DESIGN ALERT**: Found {total_findings} immunogenic peptides in alternative reading frames!")
+                            
+                            # Create detailed summary
+                            summary_df_epitopes = create_immunogenic_peptide_summary(plus1_findings, minus1_findings)
+                            if summary_df_epitopes is not None:
+                                st.subheader("📋 Detailed Epitope Findings")
+                                st.dataframe(summary_df_epitopes, use_container_width=True, hide_index=True)
+                                
+                                # Show frame-specific details
+                                if plus1_findings:
+                                    with st.expander(f"🔍 +1 Frame Epitopes ({len(plus1_findings)} found)", expanded=True):
+                                        for i, finding in enumerate(plus1_findings, 1):
+                                            st.write(f"**{i}.** `{finding['epitope']}` at position {finding['position']}-{finding['end_position']}")
+                                
+                                if minus1_findings:
+                                    with st.expander(f"🔍 -1 Frame Epitopes ({len(minus1_findings)} found)", expanded=True):
+                                        for i, finding in enumerate(minus1_findings, 1):
+                                            st.write(f"**{i}.** `{finding['epitope']}` at position {finding['position']}-{finding['end_position']}")
+                                
+                                # Download button for epitope findings
+                                excel_data = create_download_link(summary_df_epitopes, f"mRNA_Design_Immunogenic_Peptides_{len(summary_df_epitopes)}.xlsx")
+                                st.download_button(
+                                    label="📥 Download mRNA Epitope Findings (Excel)",
+                                    data=excel_data,
+                                    file_name=f"mRNA_Design_Immunogenic_Peptides_{len(summary_df_epitopes)}.xlsx",
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                    help="Download complete list of found immunogenic peptides in mRNA design"
+                                )
+                        else:
+                            st.success("✅ **Good news**: No known immunogenic peptides found in +1 or -1 reading frames of your mRNA design!")
+
+                    else:
+                        st.info("ℹ️ Immunogenic peptide scanning disabled - epitope_table_export.xlsx not found")
+
+                    # Continue with existing CAI/GC analysis...
                     # Top row: CAI/GC and +1 Stop Pie Chart
                     col_chart1, col_chart2 = st.columns([3, 1])
-
-                    with col_chart1:
-                        st.markdown("##### CDS CAI and GC Content")
-                        cai_result, cai_error = run_single_optimization(full_cds, "In-Frame Analysis")
-                        if not cai_error and cai_result:
-                            cai_df = pd.DataFrame(cai_result)
-                            fig_cai_gc = create_interactive_cai_gc_plot(
-                                cai_df['Position'].tolist(),
-                                cai_df['CAI_Weight'].tolist(),
-                                cai_df['Amino_Acid'].tolist(),
-                                full_cds,
-                                "Processed CDS"
-                            )
-                            st.plotly_chart(fig_cai_gc, use_container_width=True)
-                        else:
-                            st.warning("Could not generate CAI/GC plot.")
-
-                    with col_chart2:
-                        st.markdown("##### CDS +1 Stop Codons")
-                        plus1_stops = number_of_plus1_stops(full_cds)
-                        if plus1_stops['total'] > 0:
-                            stop_labels = ['TAA', 'TAG', 'TGA']
-                            stop_values = [plus1_stops['TAA'], plus1_stops['TAG'], plus1_stops['TGA']]
-                            fig_pie = create_interactive_pie_chart(stop_values, stop_labels, "+1 Stop Codon Distribution")
-                            st.plotly_chart(fig_pie, use_container_width=True)
-                        else:
-                            st.info("No +1 stop codons found in the processed CDS.")
-
-                    # Bottom row: full-width visualization
-                    st.markdown("---")
-                    st.markdown("##### Final mRNA Visualisation")
-                    create_geneious_like_visualization(
-                        utr5_seq=JT_5_UTR, 
-                        cds_seq=main_cds_for_display,
-                        utr3_seq=JT_3_UTR, 
-                        signal_peptide_seq=dna_signal_peptide, 
-                        key_suffix="final_mrna"
-                    )
+                    # ... rest of your existing code
 
                             
     with tab7:
@@ -6210,56 +6235,99 @@ def main():
                         
                         # Perform final analysis
                         st.subheader("📊 Final Analysis")
-                        
+
                         # The context for frame analysis must include the 5' UTR to find the junctional ACCATG
                         analysis_context_sequence = JT_5_UTR + processed_cds
-                        
+
                         # Detailed stats table (using the full, correct CDS)
                         summary_df = generate_detailed_mrna_summary(processed_cds, final_mrna_sequence, JT_5_UTR, JT_3_UTR)
                         st.dataframe(summary_df, use_container_width=True, hide_index=True)
-                        
+
+                        # ADD IMMUNOGENIC PEPTIDE SCANNING HERE
+                        epitope_df = load_immunogenic_peptides()
+
+                        if not epitope_df.empty:
+                            st.subheader("🔬 Immunogenic Peptide Scanning (Cancer Vaccine)")
+                            
+                            # Translate +1 and -1 frames of the processed CDS
+                            plus1_protein = translate_frame(processed_cds, 1)  # +1 frame
+                            minus1_protein = translate_frame(processed_cds, 2)  # -1 frame (offset by 2 to get -1)
+                            
+                            # Scan for immunogenic peptides
+                            plus1_findings = scan_for_immunogenic_peptides(plus1_protein, epitope_df, "+1 Frame")
+                            minus1_findings = scan_for_immunogenic_peptides(minus1_protein, epitope_df, "-1 Frame")
+                            
+                            total_findings = len(plus1_findings) + len(minus1_findings)
+                            
+                            # Display summary metrics
+                            scan_col1, scan_col2, scan_col3, scan_col4 = st.columns(4)
+                            with scan_col1:
+                                st.metric("Epitopes in +1 Frame", len(plus1_findings))
+                            with scan_col2:
+                                st.metric("Epitopes in -1 Frame", len(minus1_findings))
+                            with scan_col3:
+                                st.metric("Total Epitopes Found", total_findings)
+                            with scan_col4:
+                                st.metric("Epitopes in Database", len(epitope_df))
+                            
+                            if total_findings > 0:
+                                st.warning(f"⚠️ **VACCINE DESIGN ALERT**: Found {total_findings} immunogenic peptides in alternative reading frames!")
+                                
+                                # Show which input peptides might be problematic
+                                st.markdown("**🔍 Analysis of Input Peptides vs Found Epitopes:**")
+                                
+                                # Check if any of the found epitopes overlap with the input peptides
+                                input_peptides_text = " ".join([peptide.strip().upper() for peptide in peptide_sequences])
+                                overlapping_epitopes = []
+                                
+                                for finding in plus1_findings + minus1_findings:
+                                    epitope = finding['epitope']
+                                    if epitope in input_peptides_text:
+                                        overlapping_epitopes.append(finding)
+                                
+                                if overlapping_epitopes:
+                                    st.error(f"🚨 **CRITICAL**: {len(overlapping_epitopes)} epitopes found that match your input peptides!")
+                                    for finding in overlapping_epitopes:
+                                        st.write(f"- `{finding['epitope']}` found in {finding['frame']} at position {finding['position']}")
+                                else:
+                                    st.info("✅ Found epitopes do not directly match your input cancer peptides")
+                                
+                                # Create detailed summary
+                                summary_df_epitopes = create_immunogenic_peptide_summary(plus1_findings, minus1_findings)
+                                if summary_df_epitopes is not None:
+                                    st.subheader("📋 Detailed Epitope Findings")
+                                    st.dataframe(summary_df_epitopes, use_container_width=True, hide_index=True)
+                                    
+                                    # Show frame-specific details
+                                    if plus1_findings:
+                                        with st.expander(f"🔍 +1 Frame Epitopes ({len(plus1_findings)} found)", expanded=True):
+                                            for i, finding in enumerate(plus1_findings, 1):
+                                                st.write(f"**{i}.** `{finding['epitope']}` at position {finding['position']}-{finding['end_position']}")
+                                    
+                                    if minus1_findings:
+                                        with st.expander(f"🔍 -1 Frame Epitopes ({len(minus1_findings)} found)", expanded=True):
+                                            for i, finding in enumerate(minus1_findings, 1):
+                                                st.write(f"**{i}.** `{finding['epitope']}` at position {finding['position']}-{finding['end_position']}")
+                                    
+                                    # Download button for epitope findings
+                                    excel_data = create_download_link(summary_df_epitopes, f"Cancer_Vaccine_Immunogenic_Peptides_{len(summary_df_epitopes)}.xlsx")
+                                    st.download_button(
+                                        label="📥 Download Vaccine Epitope Findings (Excel)",
+                                        data=excel_data,
+                                        file_name=f"Cancer_Vaccine_Immunogenic_Peptides_{len(summary_df_epitopes)}.xlsx",
+                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                        help="Download complete list of found immunogenic peptides in cancer vaccine design"
+                                    )
+                            else:
+                                st.success("✅ **Excellent**: No known immunogenic peptides found in +1 or -1 reading frames of your cancer vaccine!")
+
+                        else:
+                            st.info("ℹ️ Immunogenic peptide scanning disabled - epitope_table_export.xlsx not found")
+
+                        # Continue with existing CAI/GC analysis...
                         # CAI/GC Plot and +1 Stop Pie Chart
                         col_chart1, col_chart2 = st.columns([3, 1])
-                        
-                        with col_chart1:
-                            st.markdown("##### CDS CAI and GC Content")
-                            # The CAI plot should analyze the full coding sequence (SP + main CDS)
-                            cai_result, cai_error = run_single_optimization(processed_cds, "In-Frame Analysis")
-                            if not cai_error and cai_result:
-                                cai_df = pd.DataFrame(cai_result)
-                                fig_cai_gc = create_interactive_cai_gc_plot(
-                                    cai_df['Position'].tolist(),
-                                    cai_df['CAI_Weight'].tolist(),
-                                    cai_df['Amino_Acid'].tolist(),
-                                    processed_cds,
-                                    "Processed CDS"
-                                )
-                                st.plotly_chart(fig_cai_gc, use_container_width=True)
-                            else:
-                                st.warning("Could not generate CAI/GC plot.")
-                        
-                            
-                        with col_chart2:
-                            st.markdown("##### CDS +1 Stop Codons")
-                            plus1_stops = number_of_plus1_stops(full_cds)
-                            if plus1_stops['total'] > 0:
-                                stop_labels = ['TAA', 'TAG', 'TGA']
-                                stop_values = [plus1_stops['TAA'], plus1_stops['TAG'], plus1_stops['TGA']]
-                                fig_pie = create_interactive_pie_chart(stop_values, stop_labels, "+1 Stop Codon Distribution")
-                                st.plotly_chart(fig_pie, use_container_width=True)
-                            else:
-                                st.info("No +1 stop codons found in the processed CDS.")
-
-                        # Bottom row: full-width visualization
-                        st.markdown("---")
-                        st.markdown("##### Final mRNA Visualisation")
-                        create_geneious_like_visualization(
-                                utr5_seq=JT_5_UTR,
-                                cds_seq=cds_with_stops[len(signal_peptide_dna):],
-                                utr3_seq=JT_3_UTR,
-                                signal_peptide_seq=signal_peptide_dna,
-                                key_suffix=f"cancer_vaccine_{id(cds_with_stops)}"  # Using a unique ID
-                            ) 
+                        # ... rest of your existing code
                     
 
 if __name__ == "__main__":
