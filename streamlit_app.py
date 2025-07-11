@@ -4276,7 +4276,121 @@ def main():
                                     else:
                                         st.info("No sequences with +1 frame stops found for individual visualization.")
                                 
-                                
+                                # BATCH IMMUNOGENIC PEPTIDE SCANNING - NEW SECTION
+                                    epitope_df = load_immunogenic_peptides()
+                                    
+                                    if not epitope_df.empty:
+                                        st.subheader("🔬 Batch Immunogenic Peptide Scanning")
+                                        
+                                        batch_epitope_findings = []
+                                        sequences_with_epitopes = 0
+                                        total_epitopes_found = 0
+                                        
+                                        with st.spinner("Scanning all sequences for immunogenic peptides..."):
+                                            progress_epitope = st.progress(0)
+                                            status_epitope = st.empty()
+                                            
+                                            for i, (name, seq) in enumerate(sequences):
+                                                status_epitope.text(f"Scanning {name} for epitopes... ({i+1}/{len(sequences)})")
+                                                
+                                                # Translate +1 and -1 frames
+                                                plus1_protein = translate_frame(seq, 1)
+                                                minus1_protein = translate_frame(seq, 2)
+                                                
+                                                # Scan for immunogenic peptides
+                                                plus1_findings = scan_for_immunogenic_peptides(plus1_protein, epitope_df, "+1 Frame")
+                                                minus1_findings = scan_for_immunogenic_peptides(minus1_protein, epitope_df, "-1 Frame")
+                                                
+                                                # Record findings for this sequence
+                                                if plus1_findings or minus1_findings:
+                                                    sequences_with_epitopes += 1
+                                                    
+                                                    for finding in plus1_findings + minus1_findings:
+                                                        finding['sequence_name'] = name
+                                                        finding['sequence_length'] = len(seq)
+                                                        batch_epitope_findings.append(finding)
+                                                        total_epitopes_found += 1
+                                                
+                                                progress_epitope.progress((i + 1) / len(sequences))
+                                            
+                                            # Clear progress indicators
+                                            progress_epitope.empty()
+                                            status_epitope.empty()
+                                        
+                                        # Display batch epitope scanning results
+                                        scan_col1, scan_col2, scan_col3, scan_col4 = st.columns(4)
+                                        with scan_col1:
+                                            st.metric("Sequences Scanned", len(sequences))
+                                        with scan_col2:
+                                            st.metric("Sequences with Epitopes", sequences_with_epitopes)
+                                        with scan_col3:
+                                            st.metric("Total Epitopes Found", total_epitopes_found)
+                                        with scan_col4:
+                                            epitope_rate = (sequences_with_epitopes / len(sequences) * 100) if len(sequences) > 0 else 0
+                                            st.metric("Epitope Rate", f"{epitope_rate:.1f}%")
+                                        
+                                        if total_epitopes_found > 0:
+                                            st.warning(f"⚠️ **BATCH ALERT**: Found {total_epitopes_found} immunogenic peptides across {sequences_with_epitopes} sequences!")
+                                            
+                                            # Create batch epitope summary
+                                            if batch_epitope_findings:
+                                                batch_epitope_df = pd.DataFrame(batch_epitope_findings)
+                                                
+                                                # Reorder columns for better display
+                                                priority_cols = ['sequence_name', 'frame', 'epitope', 'position', 'end_position', 'length']
+                                                other_cols = [col for col in batch_epitope_df.columns if col not in priority_cols]
+                                                batch_epitope_df = batch_epitope_df[priority_cols + other_cols]
+                                                
+                                                st.subheader("📋 Batch Epitope Findings Summary")
+                                                st.dataframe(batch_epitope_df, use_container_width=True, hide_index=True)
+                                                
+                                                # Summary by sequence
+                                                st.subheader("📊 Epitope Summary by Sequence")
+                                                
+                                                epitope_summary = batch_epitope_df.groupby(['sequence_name', 'frame']).size().reset_index(name='epitope_count')
+                                                epitope_pivot = epitope_summary.pivot(index='sequence_name', columns='frame', values='epitope_count').fillna(0).astype(int)
+                                                
+                                                if '+1 Frame' not in epitope_pivot.columns:
+                                                    epitope_pivot['+1 Frame'] = 0
+                                                if '-1 Frame' not in epitope_pivot.columns:
+                                                    epitope_pivot['-1 Frame'] = 0
+                                                
+                                                epitope_pivot['Total'] = epitope_pivot['+1 Frame'] + epitope_pivot['-1 Frame']
+                                                epitope_pivot = epitope_pivot.sort_values('Total', ascending=False)
+                                                
+                                                st.dataframe(epitope_pivot, use_container_width=True)
+                                                
+                                                # Interactive chart showing epitope distribution
+                                                if len(epitope_pivot) > 0:
+                                                    st.subheader("📊 Interactive Epitope Distribution")
+                                                    
+                                                    epitope_chart_data = {
+                                                        '+1 Frame': epitope_pivot['+1 Frame'].tolist(),
+                                                        '-1 Frame': epitope_pivot['-1 Frame'].tolist()
+                                                    }
+                                                    
+                                                    epitope_fig = create_interactive_stacked_bar_chart(
+                                                        epitope_pivot.index.tolist(),
+                                                        epitope_chart_data,
+                                                        'Immunogenic Peptides Found by Sequence',
+                                                        'Number of Epitopes'
+                                                    )
+                                                    st.plotly_chart(epitope_fig, use_container_width=True)
+                                                
+                                                # Download batch epitope findings
+                                                excel_data = create_download_link(batch_epitope_df, f"Batch_Immunogenic_Peptides_{total_epitopes_found}_epitopes.xlsx")
+                                                st.download_button(
+                                                    label="📥 Download Batch Epitope Findings (Excel)",
+                                                    data=excel_data,
+                                                    file_name=f"Batch_Immunogenic_Peptides_{total_epitopes_found}_epitopes.xlsx",
+                                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                                    help="Download complete list of immunogenic peptides found across all sequences"
+                                                )
+                                        else:
+                                            st.success("✅ **Excellent**: No known immunogenic peptides found in any sequence!")
+                                    
+                                    else:
+                                        st.info("ℹ️ Batch immunogenic peptide scanning disabled - epitope_table_export.xlsx not found")
                                 
                                 if total_stops > 0:
                                     # Interactive summary charts with breakdown by stop codon type
