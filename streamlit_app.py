@@ -222,8 +222,7 @@ def load_immunogenic_peptides(file_path="epitope_table_export.xlsx"):
         if os.path.exists(file_path):
             df = pd.read_excel(file_path)
             
-            # Debug: Show actual column names
-            st.write(f"**Debug - Raw columns found:** {list(df.columns)}")
+            
             
             # Clean column names - remove extra spaces and handle duplicates
             df.columns = df.columns.str.strip()
