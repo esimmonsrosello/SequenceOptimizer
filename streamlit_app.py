@@ -3223,28 +3223,44 @@ def load_immunogenic_peptides(file_path="epitope_table_export.xlsx"):
     try:
         if os.path.exists(file_path):
             df = pd.read_excel(file_path)
-            # Assuming the peptide sequences are in a column named 'Epitope', 'Peptide', or 'Sequence'
-            # Adjust column name based on your actual file structure
-            possible_columns = ['Epitope', 'Peptide', 'Sequence', 'epitope', 'peptide', 'sequence']
+            
+            # Print column names for debugging
+            st.write(f"**Debug:** Found columns: {list(df.columns)}")
+            
+            # Your file has "Name" column for the epitope sequences
+            # Let's also check for other possible column names
+            possible_columns = ['Name', 'Epitope', 'Peptide', 'Sequence', 'epitope', 'peptide', 'sequence', 'name']
             peptide_column = None
             
             for col in possible_columns:
                 if col in df.columns:
                     peptide_column = col
+                    st.write(f"**Debug:** Using column '{col}' for epitope sequences")
                     break
             
             if peptide_column is None:
-                st.warning(f"Could not find peptide column in {file_path}. Expected columns: {possible_columns}")
+                st.warning(f"Could not find peptide column in {file_path}. Available columns: {list(df.columns)}")
                 return pd.DataFrame()
             
             # Clean and prepare the data
             df_clean = df.dropna(subset=[peptide_column])
             df_clean[peptide_column] = df_clean[peptide_column].str.upper().str.strip()
             
-            # Add additional columns if they exist
+            # Filter out very short sequences (less than 3 amino acids)
+            df_clean = df_clean[df_clean[peptide_column].str.len() >= 3]
+            
+            # Add additional columns if they exist for more context
             result_df = df_clean.copy()
             
             st.success(f"Loaded {len(result_df)} immunogenic peptides from {file_path}")
+            
+            # Show a sample of the data for verification
+            if len(result_df) > 0:
+                st.write("**Sample epitopes loaded:**")
+                sample_epitopes = result_df[peptide_column].head(5).tolist()
+                for i, epitope in enumerate(sample_epitopes, 1):
+                    st.write(f"{i}. {epitope}")
+            
             return result_df
         else:
             st.warning(f"Epitope file {file_path} not found. Immunogenic peptide scanning disabled.")
@@ -3287,8 +3303,8 @@ def scan_for_immunogenic_peptides(protein_sequence, epitope_df, frame_name):
     if epitope_df.empty:
         return findings
     
-    # Get the peptide column name
-    possible_columns = ['Epitope', 'Peptide', 'Sequence', 'epitope', 'peptide', 'sequence']
+    # Get the peptide column name - prioritize 'Name' since that's what your file uses
+    possible_columns = ['Name', 'Epitope', 'Peptide', 'Sequence', 'epitope', 'peptide', 'sequence', 'name']
     peptide_column = None
     
     for col in possible_columns:
@@ -3302,33 +3318,38 @@ def scan_for_immunogenic_peptides(protein_sequence, epitope_df, frame_name):
     protein_upper = protein_sequence.upper()
     
     for idx, row in epitope_df.iterrows():
-        epitope = str(row[peptide_column]).upper().strip()
-        
-        if len(epitope) < 3:  # Skip very short peptides
-            continue
+        try:
+            epitope = str(row[peptide_column]).upper().strip()
             
-        # Find all occurrences of this epitope
-        start = 0
-        while True:
-            pos = protein_upper.find(epitope, start)
-            if pos == -1:
-                break
-            
-            finding = {
-                'epitope': epitope,
-                'position': pos + 1,  # 1-based position
-                'length': len(epitope),
-                'frame': frame_name,
-                'end_position': pos + len(epitope)
-            }
-            
-            # Add additional information if available in the epitope file
-            for col in epitope_df.columns:
-                if col != peptide_column:
-                    finding[col.lower()] = row[col] if pd.notna(row[col]) else ''
-            
-            findings.append(finding)
-            start = pos + 1  # Look for overlapping occurrences
+            # Skip invalid entries
+            if pd.isna(epitope) or epitope == 'NAN' or len(epitope) < 3:
+                continue
+                
+            # Find all occurrences of this epitope
+            start = 0
+            while True:
+                pos = protein_upper.find(epitope, start)
+                if pos == -1:
+                    break
+                
+                finding = {
+                    'epitope': epitope,
+                    'position': pos + 1,  # 1-based position
+                    'length': len(epitope),
+                    'frame': frame_name,
+                    'end_position': pos + len(epitope)
+                }
+                
+                # Add additional information if available in the epitope file
+                for col in epitope_df.columns:
+                    if col != peptide_column and col in ['Epitope ID', 'IEDB IRI', 'Object Type', 'Starting Position', 'Ending Position']:
+                        finding[col.lower().replace(' ', '_')] = row[col] if pd.notna(row[col]) else ''
+                
+                findings.append(finding)
+                start = pos + 1  # Look for overlapping occurrences
+                
+        except Exception as e:
+            continue  # Skip problematic rows
     
     return findings
 
