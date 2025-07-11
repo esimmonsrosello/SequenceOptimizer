@@ -240,7 +240,7 @@ def load_immunogenic_peptides(file_path="epitope_table_export.xlsx"):
             
             df.columns = new_columns
             
-            st.write(f"**Debug - Cleaned columns:** {list(df.columns)}")
+            
             
             # Look for the Name column (should be the 3rd column based on your structure)
             name_column = None
@@ -254,18 +254,15 @@ def load_immunogenic_peptides(file_path="epitope_table_export.xlsx"):
             # If still not found, try to find it by position (3rd column)
             if name_column is None and len(df.columns) >= 3:
                 name_column = df.columns[2]  # 3rd column (0-indexed)
-                st.write(f"**Debug - Using column by position:** {name_column}")
+                
             
             if name_column is None:
                 st.error(f"Could not find Name column. Available columns: {list(df.columns)}")
                 return pd.DataFrame()
             
-            st.write(f"**Debug - Using column:** {name_column}")
             
-            # Show first few values from the selected column
-            st.write(f"**Debug - First 5 values in {name_column}:**")
-            for i, val in enumerate(df[name_column].head(5)):
-                st.write(f"  {i+1}. {val}")
+            
+            
             
             # Clean and prepare the data
             df_clean = df.dropna(subset=[name_column])
