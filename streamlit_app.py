@@ -31,7 +31,7 @@ from datetime import datetime
 # Configure page
 st.set_page_config(
     page_title="Harmonized Optimization of Oligos and Frames",
-    page_icon=":horse:",
+    page_icon=":dna:",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -3213,6 +3213,156 @@ def run_single_optimization(sequence, method, bias_weight=None):
         return result, None
     except Exception as e:
         return None, str(e)
+    
+# Add this near the top of your file with other imports and constants
+
+# Immunogenic peptide scanning functions
+@st.cache_data
+def load_immunogenic_peptides(file_path="epitope_table_export.xlsx"):
+    """Load immunogenic peptides from Excel file"""
+    try:
+        if os.path.exists(file_path):
+            df = pd.read_excel(file_path)
+            # Assuming the peptide sequences are in a column named 'Epitope', 'Peptide', or 'Sequence'
+            # Adjust column name based on your actual file structure
+            possible_columns = ['Epitope', 'Peptide', 'Sequence', 'epitope', 'peptide', 'sequence']
+            peptide_column = None
+            
+            for col in possible_columns:
+                if col in df.columns:
+                    peptide_column = col
+                    break
+            
+            if peptide_column is None:
+                st.warning(f"Could not find peptide column in {file_path}. Expected columns: {possible_columns}")
+                return pd.DataFrame()
+            
+            # Clean and prepare the data
+            df_clean = df.dropna(subset=[peptide_column])
+            df_clean[peptide_column] = df_clean[peptide_column].str.upper().str.strip()
+            
+            # Add additional columns if they exist
+            result_df = df_clean.copy()
+            
+            st.success(f"Loaded {len(result_df)} immunogenic peptides from {file_path}")
+            return result_df
+        else:
+            st.warning(f"Epitope file {file_path} not found. Immunogenic peptide scanning disabled.")
+            return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Error loading epitope file {file_path}: {str(e)}")
+        return pd.DataFrame()
+
+def translate_frame(dna_sequence, frame_offset):
+    """Translate DNA sequence in a specific frame (0, 1, or 2 for +1, +2, +3 frames; or -1, -2 for other frames)"""
+    try:
+        if frame_offset >= 0:
+            # Positive frame (0 = normal, 1 = +1 frame, 2 = +2 frame)
+            start_pos = frame_offset
+        else:
+            # Negative frame (-1 = -1 frame, -2 = -2 frame)
+            start_pos = len(dna_sequence) + frame_offset
+            if start_pos < 0:
+                start_pos = 0
+        
+        protein = ""
+        genetic_code = st.session_state.genetic_code
+        
+        for i in range(start_pos, len(dna_sequence) - 2, 3):
+            codon = dna_sequence[i:i+3].upper()
+            if len(codon) == 3:
+                aa = genetic_code.get(codon, 'X')
+                protein += aa
+            else:
+                break
+        
+        return protein
+    except Exception as e:
+        return ""
+
+def scan_for_immunogenic_peptides(protein_sequence, epitope_df, frame_name):
+    """Scan protein sequence for immunogenic peptides"""
+    findings = []
+    
+    if epitope_df.empty:
+        return findings
+    
+    # Get the peptide column name
+    possible_columns = ['Epitope', 'Peptide', 'Sequence', 'epitope', 'peptide', 'sequence']
+    peptide_column = None
+    
+    for col in possible_columns:
+        if col in epitope_df.columns:
+            peptide_column = col
+            break
+    
+    if peptide_column is None:
+        return findings
+    
+    protein_upper = protein_sequence.upper()
+    
+    for idx, row in epitope_df.iterrows():
+        epitope = str(row[peptide_column]).upper().strip()
+        
+        if len(epitope) < 3:  # Skip very short peptides
+            continue
+            
+        # Find all occurrences of this epitope
+        start = 0
+        while True:
+            pos = protein_upper.find(epitope, start)
+            if pos == -1:
+                break
+            
+            finding = {
+                'epitope': epitope,
+                'position': pos + 1,  # 1-based position
+                'length': len(epitope),
+                'frame': frame_name,
+                'end_position': pos + len(epitope)
+            }
+            
+            # Add additional information if available in the epitope file
+            for col in epitope_df.columns:
+                if col != peptide_column:
+                    finding[col.lower()] = row[col] if pd.notna(row[col]) else ''
+            
+            findings.append(finding)
+            start = pos + 1  # Look for overlapping occurrences
+    
+    return findings
+
+def create_immunogenic_peptide_summary(findings_plus1, findings_minus1):
+    """Create a summary of immunogenic peptide findings"""
+    if not findings_plus1 and not findings_minus1:
+        return None
+    
+    all_findings = []
+    
+    # Add +1 frame findings
+    for finding in findings_plus1:
+        finding_copy = finding.copy()
+        finding_copy['frame'] = '+1 Frame'
+        all_findings.append(finding_copy)
+    
+    # Add -1 frame findings
+    for finding in findings_minus1:
+        finding_copy = finding.copy()
+        finding_copy['frame'] = '-1 Frame'
+        all_findings.append(finding_copy)
+    
+    if not all_findings:
+        return None
+    
+    # Convert to DataFrame
+    summary_df = pd.DataFrame(all_findings)
+    
+    # Reorder columns for better display
+    priority_cols = ['frame', 'epitope', 'position', 'end_position', 'length']
+    other_cols = [col for col in summary_df.columns if col not in priority_cols]
+    summary_df = summary_df[priority_cols + other_cols]
+    
+    return summary_df
 
 def main():
     """Main Streamlit application"""
@@ -3473,8 +3623,12 @@ def main():
                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                             )
                         
+                    # Find this section in your code and replace it:
                     elif optimization_method == "+1 Frame Analysis":
                         st.subheader("+1 Frame Analysis Results")
+                        
+                        # Load immunogenic peptides
+                        epitope_df = load_immunogenic_peptides()
                         
                         # Create metrics display using full width
                         metric_col1, metric_col2, metric_col3, metric_col4, metric_col5, metric_col6 = st.columns(6)
@@ -3490,6 +3644,69 @@ def main():
                             st.metric("Slippery Motifs", result['Slippery_Motifs'])
                         with metric_col6:
                             st.metric("Total -1 Stops", result['minus1_Total_Stops'])
+                        
+                        # IMMUNOGENIC PEPTIDE SCANNING - NEW SECTION
+                        if not epitope_df.empty:
+                            st.subheader("🔬 Immunogenic Peptide Scanning")
+                            
+                            # Translate +1 and -1 frames
+                            plus1_protein = translate_frame(sequence_input, 1)  # +1 frame
+                            minus1_protein = translate_frame(sequence_input, 2)  # -1 frame (offset by 2 to get -1)
+                            
+                            # Scan for immunogenic peptides
+                            plus1_findings = scan_for_immunogenic_peptides(plus1_protein, epitope_df, "+1 Frame")
+                            minus1_findings = scan_for_immunogenic_peptides(minus1_protein, epitope_df, "-1 Frame")
+                            
+                            total_findings = len(plus1_findings) + len(minus1_findings)
+                            
+                            # Display summary metrics
+                            scan_col1, scan_col2, scan_col3, scan_col4 = st.columns(4)
+                            with scan_col1:
+                                st.metric("Epitopes in +1 Frame", len(plus1_findings))
+                            with scan_col2:
+                                st.metric("Epitopes in -1 Frame", len(minus1_findings))
+                            with scan_col3:
+                                st.metric("Total Epitopes Found", total_findings)
+                            with scan_col4:
+                                st.metric("Epitopes in Database", len(epitope_df))
+                            
+                            if total_findings > 0:
+                                st.warning(f"⚠️ **ALERT**: Found {total_findings} immunogenic peptides in alternative reading frames!")
+                                
+                                # Create detailed summary
+                                summary_df = create_immunogenic_peptide_summary(plus1_findings, minus1_findings)
+                                if summary_df is not None:
+                                    st.subheader("📋 Detailed Epitope Findings")
+                                    st.dataframe(summary_df, use_container_width=True, hide_index=True)
+                                    
+                                    # Show frame-specific details
+                                    if plus1_findings:
+                                        with st.expander(f"🔍 +1 Frame Epitopes ({len(plus1_findings)} found)", expanded=True):
+                                            for i, finding in enumerate(plus1_findings, 1):
+                                                st.write(f"**{i}.** `{finding['epitope']}` at position {finding['position']}-{finding['end_position']}")
+                                    
+                                    if minus1_findings:
+                                        with st.expander(f"🔍 -1 Frame Epitopes ({len(minus1_findings)} found)", expanded=True):
+                                            for i, finding in enumerate(minus1_findings, 1):
+                                                st.write(f"**{i}.** `{finding['epitope']}` at position {finding['position']}-{finding['end_position']}")
+                                    
+                                    # Download button for epitope findings
+                                    if summary_df is not None:
+                                        excel_data = create_download_link(summary_df, f"Immunogenic_Peptides_Found_{len(summary_df)}.xlsx")
+                                        st.download_button(
+                                            label="📥 Download Epitope Findings (Excel)",
+                                            data=excel_data,
+                                            file_name=f"Immunogenic_Peptides_Found_{len(summary_df)}.xlsx",
+                                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                            help="Download complete list of found immunogenic peptides"
+                                        )
+                            else:
+                                st.success("✅ **Good news**: No known immunogenic peptides found in +1 or -1 reading frames!")
+                        
+                        else:
+                            st.info("ℹ️ Immunogenic peptide scanning disabled - epitope_table_export.xlsx not found")
+                        
+                        # ... rest of your existing +1 Frame Analysis code continues here ...
                         
                         # Visualization of +1 frame stop codons
                         if result['Plus1_Total_Stops'] > 0:
