@@ -215,6 +215,90 @@ def calculate_gc_window(sequence, position, window_size=25):
     gc_count = sum(1 for base in window_seq.upper() if base in 'GC')
     return (gc_count / len(window_seq)) * 100
 
+@st.cache_data
+def load_immunogenic_peptides(file_path="epitope_table_export.xlsx"):
+    """Load immunogenic peptides from Excel file"""
+    try:
+        if os.path.exists(file_path):
+            df = pd.read_excel(file_path)
+            
+            # Debug: Show actual column names
+            st.write(f"**Debug - Raw columns found:** {list(df.columns)}")
+            
+            # Clean column names - remove extra spaces and handle duplicates
+            df.columns = df.columns.str.strip()
+            
+            # Handle duplicate column names by keeping only the first occurrence
+            seen_columns = {}
+            new_columns = []
+            for col in df.columns:
+                if col in seen_columns:
+                    seen_columns[col] += 1
+                    new_columns.append(f"{col}_{seen_columns[col]}")
+                else:
+                    seen_columns[col] = 0
+                    new_columns.append(col)
+            
+            df.columns = new_columns
+            
+            st.write(f"**Debug - Cleaned columns:** {list(df.columns)}")
+            
+            # Look for the Name column (should be the 3rd column based on your structure)
+            name_column = None
+            possible_name_columns = ['Name', 'Name_1', 'Name_2', 'Name_3']
+            
+            for col in possible_name_columns:
+                if col in df.columns:
+                    name_column = col
+                    break
+            
+            # If still not found, try to find it by position (3rd column)
+            if name_column is None and len(df.columns) >= 3:
+                name_column = df.columns[2]  # 3rd column (0-indexed)
+                st.write(f"**Debug - Using column by position:** {name_column}")
+            
+            if name_column is None:
+                st.error(f"Could not find Name column. Available columns: {list(df.columns)}")
+                return pd.DataFrame()
+            
+            st.write(f"**Debug - Using column:** {name_column}")
+            
+            # Show first few values from the selected column
+            st.write(f"**Debug - First 5 values in {name_column}:**")
+            for i, val in enumerate(df[name_column].head(5)):
+                st.write(f"  {i+1}. {val}")
+            
+            # Clean and prepare the data
+            df_clean = df.dropna(subset=[name_column])
+            df_clean = df_clean[df_clean[name_column].notna()]
+            df_clean[name_column] = df_clean[name_column].astype(str).str.upper().str.strip()
+            
+            # Filter out very short sequences and invalid entries
+            df_clean = df_clean[df_clean[name_column].str.len() >= 3]
+            df_clean = df_clean[df_clean[name_column] != 'NAN']
+            df_clean = df_clean[df_clean[name_column] != '']
+            
+            # Store the column name for later use
+            df_clean.attrs['epitope_column'] = name_column
+            
+            st.success(f"Loaded {len(df_clean)} immunogenic peptides from column '{name_column}'")
+            
+            # Show a sample of the epitopes
+            if len(df_clean) > 0:
+                st.write(f"**Sample epitopes loaded from '{name_column}' column:**")
+                sample_epitopes = df_clean[name_column].head(10).tolist()
+                for i, epitope in enumerate(sample_epitopes, 1):
+                    st.write(f"{i}. {epitope}")
+            
+            return df_clean
+        else:
+            st.warning(f"Epitope file {file_path} not found. Immunogenic peptide scanning disabled.")
+            return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Error loading epitope file {file_path}: {str(e)}")
+        st.write(f"**Debug - Exception details:** {e}")
+        return pd.DataFrame()
+
 def get_consistent_color_palette(n_colors, palette_type="optimization"):
     """Generate consistent color palettes for charts based on the active theme"""
     theme_colors = THEMES[st.session_state.active_theme]["colors"]
@@ -876,89 +960,7 @@ def validate_dna_sequence(sequence):
         logger.warning(f"Sequence length ({len(cleaned)}) is not a multiple of 3")
     return True, cleaned, ""
 
-@st.cache_data
-def load_immunogenic_peptides(file_path="epitope_table_export.xlsx"):
-    """Load immunogenic peptides from Excel file"""
-    try:
-        if os.path.exists(file_path):
-            df = pd.read_excel(file_path)
-            
-            # Debug: Show actual column names
-            st.write(f"**Debug - Raw columns found:** {list(df.columns)}")
-            
-            # Clean column names - remove extra spaces and handle duplicates
-            df.columns = df.columns.str.strip()
-            
-            # Handle duplicate column names by keeping only the first occurrence
-            seen_columns = {}
-            new_columns = []
-            for col in df.columns:
-                if col in seen_columns:
-                    seen_columns[col] += 1
-                    new_columns.append(f"{col}_{seen_columns[col]}")
-                else:
-                    seen_columns[col] = 0
-                    new_columns.append(col)
-            
-            df.columns = new_columns
-            
-            st.write(f"**Debug - Cleaned columns:** {list(df.columns)}")
-            
-            # Look for the Name column (should be the 3rd column based on your structure)
-            name_column = None
-            possible_name_columns = ['Name', 'Name_1', 'Name_2', 'Name_3']
-            
-            for col in possible_name_columns:
-                if col in df.columns:
-                    name_column = col
-                    break
-            
-            # If still not found, try to find it by position (3rd column)
-            if name_column is None and len(df.columns) >= 3:
-                name_column = df.columns[2]  # 3rd column (0-indexed)
-                st.write(f"**Debug - Using column by position:** {name_column}")
-            
-            if name_column is None:
-                st.error(f"Could not find Name column. Available columns: {list(df.columns)}")
-                return pd.DataFrame()
-            
-            st.write(f"**Debug - Using column:** {name_column}")
-            
-            # Show first few values from the selected column
-            st.write(f"**Debug - First 5 values in {name_column}:**")
-            for i, val in enumerate(df[name_column].head(5)):
-                st.write(f"  {i+1}. {val}")
-            
-            # Clean and prepare the data
-            df_clean = df.dropna(subset=[name_column])
-            df_clean = df_clean[df_clean[name_column].notna()]
-            df_clean[name_column] = df_clean[name_column].astype(str).str.upper().str.strip()
-            
-            # Filter out very short sequences and invalid entries
-            df_clean = df_clean[df_clean[name_column].str.len() >= 3]
-            df_clean = df_clean[df_clean[name_column] != 'NAN']
-            df_clean = df_clean[df_clean[name_column] != '']
-            
-            # Store the column name for later use
-            df_clean.attrs['epitope_column'] = name_column
-            
-            st.success(f"Loaded {len(df_clean)} immunogenic peptides from column '{name_column}'")
-            
-            # Show a sample of the epitopes
-            if len(df_clean) > 0:
-                st.write(f"**Sample epitopes loaded from '{name_column}' column:**")
-                sample_epitopes = df_clean[name_column].head(10).tolist()
-                for i, epitope in enumerate(sample_epitopes, 1):
-                    st.write(f"{i}. {epitope}")
-            
-            return df_clean
-        else:
-            st.warning(f"Epitope file {file_path} not found. Immunogenic peptide scanning disabled.")
-            return pd.DataFrame()
-    except Exception as e:
-        st.error(f"Error loading epitope file {file_path}: {str(e)}")
-        st.write(f"**Debug - Exception details:** {e}")
-        return pd.DataFrame()
+
 
 def scan_for_immunogenic_peptides(protein_sequence, epitope_df, frame_name):
     """Scan protein sequence for immunogenic peptides"""
@@ -3341,60 +3343,9 @@ def run_single_optimization(sequence, method, bias_weight=None):
     except Exception as e:
         return None, str(e)
     
-# Add this near the top of your file with other imports and constants
 
-# Immunogenic peptide scanning functions
-@st.cache_data
-def load_immunogenic_peptides(file_path="epitope_table_export.xlsx"):
-    """Load immunogenic peptides from Excel file"""
-    try:
-        if os.path.exists(file_path):
-            df = pd.read_excel(file_path)
-            
-            # Print column names for debugging
-            st.write(f"**Debug:** Found columns: {list(df.columns)}")
-            
-            # Your file has "Name" column for the epitope sequences
-            # Let's also check for other possible column names
-            possible_columns = ['Name', 'Epitope', 'Peptide', 'Sequence', 'epitope', 'peptide', 'sequence', 'name']
-            peptide_column = None
-            
-            for col in possible_columns:
-                if col in df.columns:
-                    peptide_column = col
-                    st.write(f"**Debug:** Using column '{col}' for epitope sequences")
-                    break
-            
-            if peptide_column is None:
-                st.warning(f"Could not find peptide column in {file_path}. Available columns: {list(df.columns)}")
-                return pd.DataFrame()
-            
-            # Clean and prepare the data
-            df_clean = df.dropna(subset=[peptide_column])
-            df_clean[peptide_column] = df_clean[peptide_column].str.upper().str.strip()
-            
-            # Filter out very short sequences (less than 3 amino acids)
-            df_clean = df_clean[df_clean[peptide_column].str.len() >= 3]
-            
-            # Add additional columns if they exist for more context
-            result_df = df_clean.copy()
-            
-            st.success(f"Loaded {len(result_df)} immunogenic peptides from {file_path}")
-            
-            # Show a sample of the data for verification
-            if len(result_df) > 0:
-                st.write("**Sample epitopes loaded:**")
-                sample_epitopes = result_df[peptide_column].head(5).tolist()
-                for i, epitope in enumerate(sample_epitopes, 1):
-                    st.write(f"{i}. {epitope}")
-            
-            return result_df
-        else:
-            st.warning(f"Epitope file {file_path} not found. Immunogenic peptide scanning disabled.")
-            return pd.DataFrame()
-    except Exception as e:
-        st.error(f"Error loading epitope file {file_path}: {str(e)}")
-        return pd.DataFrame()
+
+
 
 def translate_frame(dna_sequence, frame_offset):
     """Translate DNA sequence in a specific frame (0, 1, or 2 for +1, +2, +3 frames; or -1, -2 for other frames)"""
