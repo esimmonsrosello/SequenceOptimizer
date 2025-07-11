@@ -279,12 +279,7 @@ def load_immunogenic_peptides(file_path="epitope_table_export.xlsx"):
             
             st.success(f"Loaded {len(df_clean)} immunogenic peptides from column '{name_column}'")
             
-            # Show a sample of the epitopes
-            if len(df_clean) > 0:
-                st.write(f"**Sample epitopes loaded from '{name_column}' column:**")
-                sample_epitopes = df_clean[name_column].head(10).tolist()
-                for i, epitope in enumerate(sample_epitopes, 1):
-                    st.write(f"{i}. {epitope}")
+           
             
             return df_clean
         else:
