@@ -27,11 +27,14 @@ from dotenv import load_dotenv
 from typing import List, Dict, Set
 from anthropic import Anthropic
 from datetime import datetime
+import matplotlib.backends.backend_pdf
+from matplotlib.backends.backend_pdf import PdfPages
+import plotly.io as pio
 
 # Configure page
 st.set_page_config(
-    page_title="Harmonized Optimization of Oligos and Frames",
-    page_icon=":horse:",
+    page_title="DNA Codon Optimization and Analysis Tool",
+    page_icon=":dna:",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -214,81 +217,6 @@ def calculate_gc_window(sequence, position, window_size=25):
     # Calculate GC content
     gc_count = sum(1 for base in window_seq.upper() if base in 'GC')
     return (gc_count / len(window_seq)) * 100
-
-@st.cache_data
-def load_immunogenic_peptides(file_path="epitope_table_export.xlsx"):
-    """Load immunogenic peptides from Excel file"""
-    try:
-        if os.path.exists(file_path):
-            df = pd.read_excel(file_path)
-            
-            
-            
-            # Clean column names - remove extra spaces and handle duplicates
-            df.columns = df.columns.str.strip()
-            
-            # Handle duplicate column names by keeping only the first occurrence
-            seen_columns = {}
-            new_columns = []
-            for col in df.columns:
-                if col in seen_columns:
-                    seen_columns[col] += 1
-                    new_columns.append(f"{col}_{seen_columns[col]}")
-                else:
-                    seen_columns[col] = 0
-                    new_columns.append(col)
-            
-            df.columns = new_columns
-            
-            
-            
-            # Look for the Name column (should be the 3rd column based on your structure)
-            name_column = None
-            possible_name_columns = ['Name', 'Name_1', 'Name_2', 'Name_3']
-            
-            for col in possible_name_columns:
-                if col in df.columns:
-                    name_column = col
-                    break
-            
-            # If still not found, try to find it by position (3rd column)
-            if name_column is None and len(df.columns) >= 3:
-                name_column = df.columns[2]  # 3rd column (0-indexed)
-                
-            
-            if name_column is None:
-                st.error(f"Could not find Name column. Available columns: {list(df.columns)}")
-                return pd.DataFrame()
-            
-            
-            
-            
-            
-            # Clean and prepare the data
-            df_clean = df.dropna(subset=[name_column])
-            df_clean = df_clean[df_clean[name_column].notna()]
-            df_clean[name_column] = df_clean[name_column].astype(str).str.upper().str.strip()
-            
-            # Filter out very short sequences and invalid entries
-            df_clean = df_clean[df_clean[name_column].str.len() >= 3]
-            df_clean = df_clean[df_clean[name_column] != 'NAN']
-            df_clean = df_clean[df_clean[name_column] != '']
-            
-            # Store the column name for later use
-            df_clean.attrs['epitope_column'] = name_column
-            
-            st.success(f"Loaded {len(df_clean)} immunogenic peptides from column '{name_column}'")
-            
-           
-            
-            return df_clean
-        else:
-            st.warning(f"Epitope file {file_path} not found. Immunogenic peptide scanning disabled.")
-            return pd.DataFrame()
-    except Exception as e:
-        st.error(f"Error loading epitope file {file_path}: {str(e)}")
-        st.write(f"**Debug - Exception details:** {e}")
-        return pd.DataFrame()
 
 def get_consistent_color_palette(n_colors, palette_type="optimization"):
     """Generate consistent color palettes for charts based on the active theme"""
@@ -951,71 +879,37 @@ def validate_dna_sequence(sequence):
         logger.warning(f"Sequence length ({len(cleaned)}) is not a multiple of 3")
     return True, cleaned, ""
 
-
-
-def scan_for_immunogenic_peptides(protein_sequence, epitope_df, frame_name):
-    """Scan protein sequence for immunogenic peptides"""
-    findings = []
-    
-    if epitope_df.empty:
-        return findings
-    
-    # Get the epitope column name from the dataframe attributes
-    epitope_column = epitope_df.attrs.get('epitope_column', None)
-    
-    if epitope_column is None:
-        # Fallback: try to find the Name column or use the 3rd column
-        possible_columns = ['Name', 'Name_1', 'Name_2', 'Name_3']
-        for col in possible_columns:
-            if col in epitope_df.columns:
-                epitope_column = col
-                break
+@st.cache_data
+def load_codon_data_from_file(file_content):
+    """Load codon usage data from uploaded file"""
+    try:
+        df = pd.read_excel(io.BytesIO(file_content))
+        df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_")
+        required_columns = ['triplet', 'amino_acid', 'fraction']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            raise ValueError(f"Missing required columns: {missing_columns}")
         
-        if epitope_column is None and len(epitope_df.columns) >= 3:
-            epitope_column = epitope_df.columns[2]  # 3rd column
-    
-    if epitope_column is None or epitope_column not in epitope_df.columns:
-        st.error(f"Could not find epitope column. Available columns: {list(epitope_df.columns)}")
-        return findings
-    
-    protein_upper = protein_sequence.upper()
-    
-    for idx, row in epitope_df.iterrows():
-        try:
-            epitope = str(row[epitope_column]).upper().strip()
-            
-            # Skip invalid entries
-            if pd.isna(epitope) or epitope == 'NAN' or epitope == '' or len(epitope) < 3:
-                continue
-                
-            # Find all occurrences of this epitope in the protein sequence
-            start = 0
-            while True:
-                pos = protein_upper.find(epitope, start)
-                if pos == -1:
-                    break
-                
-                finding = {
-                    'epitope': epitope,
-                    'position': pos + 1,  # 1-based position
-                    'length': len(epitope),
-                    'frame': frame_name,
-                    'end_position': pos + len(epitope)
-                }
-                
-                # Add additional information from first few columns if available
-                if len(epitope_df.columns) > 0 and pd.notna(row.iloc[0]):
-                    finding['iedb_iri'] = row.iloc[0]
-                if len(epitope_df.columns) > 1 and pd.notna(row.iloc[1]):
-                    finding['object_type'] = row.iloc[1]
-                
-                findings.append(finding)
-                start = pos + 1  # Look for overlapping occurrences
-                
-        except Exception as e:
-            continue  # Skip problematic rows
-    
-    return findings
+        df['triplet'] = df['triplet'].str.upper().str.strip()
+        df['amino_acid'] = df['amino_acid'].str.upper().str.strip().replace({'*': 'X'})
+        df = df.dropna(subset=['triplet', 'amino_acid', 'fraction'])
+        
+        genetic_code = df.set_index('triplet')['amino_acid'].to_dict()
+        max_fraction = df.groupby('amino_acid')['fraction'].transform('max')
+        df['weight'] = df['fraction'] / max_fraction
+        codon_weights = df.set_index('triplet')['weight'].to_dict()
+        preferred_codons = df.sort_values('fraction', ascending=False).drop_duplicates('amino_acid').set_index('amino_acid')['triplet'].to_dict()
+        human_codon_usage = df.set_index('triplet')['fraction'].to_dict()
+        
+        aa_to_codons = defaultdict(list)
+        for codon_val, freq in human_codon_usage.items():
+            aa = genetic_code.get(codon_val, None)
+            if aa and aa != 'X':
+                aa_to_codons[aa].append((codon_val, freq))
+        
+        return genetic_code, codon_weights, preferred_codons, human_codon_usage, aa_to_codons, df
+    except Exception as e:
+        raise Exception(f"Error loading codon file: {e}")
 
 def calculate_gc_content(sequence):
     """Calculate GC content percentage of DNA sequence"""
@@ -1055,14 +949,32 @@ def adjust_gc_content(sequence, max_gc=70.0, min_gc=55.0):
     Adjusts the GC content of a sequence to be within a target range by using synonymous codons.
     Prioritizes swapping high-GC codons for low-GC codons.
     """
-    # Check if codon data is loaded
-    if not st.session_state.genetic_code or not st.session_state.aa_to_codons:
-        st.error("Codon usage data not loaded. Cannot adjust GC content.")
-        return sequence
+    # Auto-load default codon file if available and not already loaded
+    if not st.session_state.genetic_code and 'codon_data_loaded' not in st.session_state:
+        default_codon_file = "HumanCodons.xlsx"
+        if os.path.exists(default_codon_file):
+            try:
+                with open(default_codon_file, 'rb') as f:
+                    file_content = f.read()
+                genetic_code, codon_weights, preferred_codons, human_codon_usage, aa_to_codons, codon_df = load_codon_data_from_file(file_content)
+                st.session_state.genetic_code = genetic_code
+                st.session_state.codon_weights = codon_weights
+                st.session_state.preferred_codons = preferred_codons
+                st.session_state.human_codon_usage = human_codon_usage
+                st.session_state.aa_to_codons = aa_to_codons
+                st.session_state.codon_data_loaded = True
+                st.session_state.codon_file_source = "Default (HumanCodons.xlsx)"
+                st.success(f"Auto-loaded {len(codon_df)} codon entries from HumanCodons.xlsx")
+            except Exception as e:
+                st.warning(f"Could not auto-load HumanCodons.xlsx: {e}")
+                # Don't stop the app, just continue without auto-loading
+        else:
+        # File doesn't exist, just continue - user can upload manually
+            pass
 
     current_gc = calculate_gc_content(sequence)
     if current_gc <= max_gc:
-        st.info(f"Initial GC content ({current_gc:.1f}%) is already within the target range (<= {max_gc}%). No adjustment needed.")
+        st.info(f"Initial GC content ({current_gc:.1f}%) is already within the target range (<= {max_gc}%) No adjustment needed.")
         return sequence
 
     codons = [sequence[i:i+3] for i in range(0, len(sequence), 3)]
@@ -1106,6 +1018,49 @@ def adjust_gc_content(sequence, max_gc=70.0, min_gc=55.0):
     st.success(f"GC content adjusted from {calculate_gc_content(sequence):.1f}% to {final_gc:.1f}%.")
     
     return final_sequence
+
+def create_pdf_export(figures_data, filename_prefix="analysis_report"):
+    """Create PDF export with multiple figures"""
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+    import plotly.io as pio
+    import io
+    import tempfile
+    
+    pdf_buffer = io.BytesIO()
+    
+    with PdfPages(pdf_buffer) as pdf:
+        for fig_data in figures_data:
+            fig_type = fig_data.get('type', 'plotly')
+            title = fig_data.get('title', 'Chart')
+            
+            if fig_type == 'plotly':
+                # Convert Plotly figure to static image
+                fig = fig_data['figure']
+                img_bytes = pio.to_image(fig, format="png", width=1200, height=800)
+                
+                # Create matplotlib figure to embed the image
+                plt_fig, ax = plt.subplots(figsize=(12, 8))
+                ax.axis('off')
+                
+                # Load and display the image
+                from PIL import Image
+                img = Image.open(io.BytesIO(img_bytes))
+                ax.imshow(img)
+                ax.set_title(title, fontsize=14, fontweight='bold', pad=20)
+                
+                pdf.savefig(plt_fig, bbox_inches='tight', dpi=300)
+                plt.close(plt_fig)
+                
+            elif fig_type == 'matplotlib':
+                # Direct matplotlib figure
+                fig = fig_data['figure']
+                fig.suptitle(title, fontsize=14, fontweight='bold')
+                pdf.savefig(fig, bbox_inches='tight', dpi=300)
+                plt.close(fig)
+    
+    pdf_buffer.seek(0)
+    return pdf_buffer.getvalue()
 
 def enforce_local_gc_content(sequence, target_max_gc=70.0, window_size=10, step_size=1):
     """
@@ -3148,36 +3103,7 @@ Format: {{"rankings": [{{"accession": "XXX", "rank": 1, "reason": "explanation"}
                 download_data.append(row)
         
         return pd.DataFrame(download_data)
-def load_codon_data_from_file(file_content):
-    """Load codon usage data from uploaded file"""
-    try:
-        df = pd.read_excel(io.BytesIO(file_content))
-        df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_")
-        required_columns = ['triplet', 'amino_acid', 'fraction']
-        missing_columns = [col for col in required_columns if col not in df.columns]
-        if missing_columns:
-            raise ValueError(f"Missing required columns: {missing_columns}")
-        
-        df['triplet'] = df['triplet'].str.upper().str.strip()
-        df['amino_acid'] = df['amino_acid'].str.upper().str.strip().replace({'*': 'X'})
-        df = df.dropna(subset=['triplet', 'amino_acid', 'fraction'])
-        
-        genetic_code = df.set_index('triplet')['amino_acid'].to_dict()
-        max_fraction = df.groupby('amino_acid')['fraction'].transform('max')
-        df['weight'] = df['fraction'] / max_fraction
-        codon_weights = df.set_index('triplet')['weight'].to_dict()
-        preferred_codons = df.sort_values('fraction', ascending=False).drop_duplicates('amino_acid').set_index('amino_acid')['triplet'].to_dict()
-        human_codon_usage = df.set_index('triplet')['fraction'].to_dict()
-        
-        aa_to_codons = defaultdict(list)
-        for codon_val, freq in human_codon_usage.items():
-            aa = genetic_code.get(codon_val, None)
-            if aa and aa != 'X':
-                aa_to_codons[aa].append((codon_val, freq))
-        
-        return genetic_code, codon_weights, preferred_codons, human_codon_usage, aa_to_codons, df
-    except Exception as e:
-        raise Exception(f"Error loading codon file: {e}")
+
 
 def test_serper_connection(api_key: str) -> Dict:
     """Test SERPER API connection with a simple search"""
@@ -3333,73 +3259,72 @@ def run_single_optimization(sequence, method, bias_weight=None):
         return result, None
     except Exception as e:
         return None, str(e)
-    
 
-
-
-
-def translate_frame(dna_sequence, frame_offset):
-    """Translate DNA sequence in a specific frame (0, 1, or 2 for +1, +2, +3 frames; or -1, -2 for other frames)"""
-    try:
-        if frame_offset >= 0:
-            # Positive frame (0 = normal, 1 = +1 frame, 2 = +2 frame)
-            start_pos = frame_offset
-        else:
-            # Negative frame (-1 = -1 frame, -2 = -2 frame)
-            start_pos = len(dna_sequence) + frame_offset
-            if start_pos < 0:
-                start_pos = 0
-        
-        protein = ""
-        genetic_code = st.session_state.genetic_code
-        
-        for i in range(start_pos, len(dna_sequence) - 2, 3):
-            codon = dna_sequence[i:i+3].upper()
-            if len(codon) == 3:
-                aa = genetic_code.get(codon, 'X')
-                protein += aa
-            else:
-                break
-        
-        return protein
-    except Exception as e:
-        return ""
-
-
-
-def create_immunogenic_peptide_summary(findings_plus1, findings_minus1):
-    """Create a summary of immunogenic peptide findings"""
-    if not findings_plus1 and not findings_minus1:
-        return None
     
-    all_findings = []
-    
-    # Add +1 frame findings
-    for finding in findings_plus1:
-        finding_copy = finding.copy()
-        finding_copy['frame'] = '+1 Frame'
-        all_findings.append(finding_copy)
-    
-    # Add -1 frame findings
-    for finding in findings_minus1:
-        finding_copy = finding.copy()
-        finding_copy['frame'] = '-1 Frame'
-        all_findings.append(finding_copy)
-    
-    if not all_findings:
-        return None
-    
-    # Convert to DataFrame
-    summary_df = pd.DataFrame(all_findings)
-    
-    # Reorder columns for better display
-    priority_cols = ['frame', 'epitope', 'position', 'end_position', 'length']
-    other_cols = [col for col in summary_df.columns if col not in priority_cols]
-    summary_df = summary_df[priority_cols + other_cols]
-    
-    return summary_df
-
 def main():
+        
+    """Main Streamlit application"""
+    st.write("🚀 DEBUG: Main function started")
+
+    # Apply the selected theme CSS
+    st.write("🎨 DEBUG: Applying theme...")
+    inject_app_theme()
+    st.write("✅ DEBUG: Theme applied")
+
+    # Initialize research engines
+    st.write("🔬 DEBUG: Initializing engines...")
+    if 'patent_engine' not in st.session_state:
+        st.session_state.patent_engine = PatentSearchEngine()
+    if 'ncbi_engine' not in st.session_state:
+        st.session_state.ncbi_engine = NCBISearchEngine()
+    if 'uniprot_engine' not in st.session_state:
+        st.session_state.uniprot_engine = UniProtSearchEngine()
+    st.write("✅ DEBUG: Engines initialized")
+        
+    st.write("📝 DEBUG: Setting title...")
+    st.title("DNA Codon Optimization and Analysis Tool")
+    st.markdown("DNA sequence optimization and analysis")
+    st.write("✅ DEBUG: Title set")
+
+    st.write("📁 DEBUG: Creating sidebar...")
+    # Sidebar for settings and configuration
+    with st.sidebar:
+        st.write("🔧 DEBUG: Inside sidebar...")
+        st.header("Configuration")
+        
+        # Auto-load default codon file if available and not already loaded
+        st.write("📊 DEBUG: Checking codon file...")
+        if not st.session_state.genetic_code and 'codon_data_loaded' not in st.session_state:
+            # ... your existing codon loading code here ...
+            pass  # For now, just skip this to test
+        st.write("✅ DEBUG: Codon file check complete")
+        
+        # Display current codon file status
+        st.write("💾 DEBUG: Displaying codon status...")
+        if st.session_state.genetic_code:
+            codon_source = st.session_state.get('codon_file_source', 'Unknown')
+            st.info(f"**Codon Data Loaded:** {codon_source}")
+        st.write("✅ DEBUG: Codon status displayed")
+        
+        # Rest of sidebar...
+        st.write("⚙️ DEBUG: Creating sidebar controls...")
+        # Add more debug statements before each major sidebar section
+
+    st.write("✅ DEBUG: Sidebar complete")
+
+    st.write("📋 DEBUG: Creating tabs...")
+    # Main interface tabs
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["Single Sequence", "Batch Optimization", "CDS Database Search", "Patent Search", "About", "mRNA Design", "Cancer Vaccine Design"])
+    st.write("✅ DEBUG: Tabs created")
+
+    st.write("🔀 DEBUG: Starting tab content...")
+    with tab1:
+        st.write("📝 DEBUG: Tab 1 content starting...")
+        st.header("Single Sequence Optimization")
+        # Add debug statements throughout your tab content
+        
+    
+    
     """Main Streamlit application"""
     # Apply the selected theme CSS
     inject_app_theme()
@@ -3411,7 +3336,7 @@ def main():
     if 'uniprot_engine' not in st.session_state:
         st.session_state.uniprot_engine = UniProtSearchEngine()
         
-    st.title("Harmonized Optimization of Oligos and Frames")
+    st.title("DNA Codon Optimization and Analysis Tool")
     st.markdown("DNA sequence optimization and analysis")
     
     # Sidebar for settings and configuration
@@ -3661,9 +3586,6 @@ def main():
                     elif optimization_method == "+1 Frame Analysis":
                         st.subheader("+1 Frame Analysis Results")
                         
-                        # Load immunogenic peptides
-                        epitope_df = load_immunogenic_peptides()
-                        
                         # Create metrics display using full width
                         metric_col1, metric_col2, metric_col3, metric_col4, metric_col5, metric_col6 = st.columns(6)
                         with metric_col1:
@@ -3678,69 +3600,6 @@ def main():
                             st.metric("Slippery Motifs", result['Slippery_Motifs'])
                         with metric_col6:
                             st.metric("Total -1 Stops", result['minus1_Total_Stops'])
-                        
-                        # IMMUNOGENIC PEPTIDE SCANNING - NEW SECTION
-                        if not epitope_df.empty:
-                            st.subheader("🔬 Immunogenic Peptide Scanning")
-                            
-                            # Translate +1 and -1 frames
-                            plus1_protein = translate_frame(sequence_input, 1)  # +1 frame
-                            minus1_protein = translate_frame(sequence_input, 2)  # -1 frame (offset by 2 to get -1)
-                            
-                            # Scan for immunogenic peptides
-                            plus1_findings = scan_for_immunogenic_peptides(plus1_protein, epitope_df, "+1 Frame")
-                            minus1_findings = scan_for_immunogenic_peptides(minus1_protein, epitope_df, "-1 Frame")
-                            
-                            total_findings = len(plus1_findings) + len(minus1_findings)
-                            
-                            # Display summary metrics
-                            scan_col1, scan_col2, scan_col3, scan_col4 = st.columns(4)
-                            with scan_col1:
-                                st.metric("Epitopes in +1 Frame", len(plus1_findings))
-                            with scan_col2:
-                                st.metric("Epitopes in -1 Frame", len(minus1_findings))
-                            with scan_col3:
-                                st.metric("Total Epitopes Found", total_findings)
-                            with scan_col4:
-                                st.metric("Epitopes in Database", len(epitope_df))
-                            
-                            if total_findings > 0:
-                                st.warning(f"⚠️ **ALERT**: Found {total_findings} immunogenic peptides in alternative reading frames!")
-                                
-                                # Create detailed summary
-                                summary_df = create_immunogenic_peptide_summary(plus1_findings, minus1_findings)
-                                if summary_df is not None:
-                                    st.subheader("📋 Detailed Epitope Findings")
-                                    st.dataframe(summary_df, use_container_width=True, hide_index=True)
-                                    
-                                    # Show frame-specific details
-                                    if plus1_findings:
-                                        with st.expander(f"🔍 +1 Frame Epitopes ({len(plus1_findings)} found)", expanded=True):
-                                            for i, finding in enumerate(plus1_findings, 1):
-                                                st.write(f"**{i}.** `{finding['epitope']}` at position {finding['position']}-{finding['end_position']}")
-                                    
-                                    if minus1_findings:
-                                        with st.expander(f"🔍 -1 Frame Epitopes ({len(minus1_findings)} found)", expanded=True):
-                                            for i, finding in enumerate(minus1_findings, 1):
-                                                st.write(f"**{i}.** `{finding['epitope']}` at position {finding['position']}-{finding['end_position']}")
-                                    
-                                    # Download button for epitope findings
-                                    if summary_df is not None:
-                                        excel_data = create_download_link(summary_df, f"Immunogenic_Peptides_Found_{len(summary_df)}.xlsx")
-                                        st.download_button(
-                                            label="📥 Download Epitope Findings (Excel)",
-                                            data=excel_data,
-                                            file_name=f"Immunogenic_Peptides_Found_{len(summary_df)}.xlsx",
-                                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                            help="Download complete list of found immunogenic peptides"
-                                        )
-                            else:
-                                st.success("✅ **Good news**: No known immunogenic peptides found in +1 or -1 reading frames!")
-                        
-                        else:
-                            st.info("ℹ️ Immunogenic peptide scanning disabled - epitope_table_export.xlsx not found")
-                        
-                        # ... rest of your existing +1 Frame Analysis code continues here ...
                         
                         # Visualization of +1 frame stop codons
                         if result['Plus1_Total_Stops'] > 0:
@@ -4140,56 +3999,185 @@ def main():
                             
                             # Display results
                             if cai_sequences:
-                                # Display all In-Frame interactive graphs
-                                colors = get_consistent_color_palette(len(cai_sequences), "analysis")
-                                for i, selected_data in enumerate(cai_sequences):
-                                    df = selected_data['cai_data']
-                                    seq_name = selected_data['name']
-                                    seq_sequence = selected_data['sequence']
-                                    
-                                    st.markdown(f"### 📊 Interactive In-Frame Analysis for: {seq_name}")
+                                # MOVED: Batch Summary Statistics First
+                                st.markdown("#### 📈 Batch Summary Statistics")
+                                
+                                all_cai_weights = []
+                                all_gc_contents = []
+                                low_cai_sequences = []
+                                
+                                for seq_data in cai_sequences:
+                                    df = seq_data['cai_data']
+                                    sequence = seq_data['sequence']
+                                    name = seq_data['name']
                                     
                                     if not df.empty and 'CAI_Weight' in df.columns:
-                                        positions = df['Position'].tolist()
                                         cai_weights = df['CAI_Weight'].tolist()
-                                        amino_acids = df['Amino_Acid'].tolist()
+                                        all_cai_weights.extend(cai_weights)
                                         
-                                        # Create interactive plot with GC content
-                                        color = colors[i % len(colors)]
-                                        fig = create_interactive_cai_gc_plot(
-                                            positions, 
-                                            cai_weights, 
-                                            amino_acids, 
-                                            seq_sequence, 
-                                            seq_name,
-                                            color
-                                        )
+                                        gc_content = calculate_gc_content(sequence)
+                                        all_gc_contents.append(gc_content)
                                         
-                                        st.plotly_chart(fig, use_container_width=True)
+                                        avg_cai = np.mean(cai_weights)
+                                        if avg_cai < 0.5:
+                                            low_cai_sequences.append(name)
+                                
+                                if all_cai_weights and all_gc_contents:
+                                    col_summary1, col_summary2, col_summary3, col_summary4, col_summary5 = st.columns(5)
+                                    with col_summary1:
+                                        st.metric("Total Sequences", len(cai_sequences))
+                                    with col_summary2:
+                                        st.metric("Avg CAI (All)", f"{np.mean(all_cai_weights):.3f}")
+                                    with col_summary3:
+                                        st.metric("Avg GC Content", f"{np.mean(all_gc_contents):.1f}%")
+                                    with col_summary4:
+                                        st.metric("Low CAI Sequences", f"{len(low_cai_sequences)}")
+                                    with col_summary5:
+                                        st.metric("CAI Range", f"{np.min(all_cai_weights):.3f} - {np.max(all_cai_weights):.3f}")
+                                
+                                # NOW: Individual Charts in Organized Folders
+                                st.markdown("#### 🗂️ Individual Sequence Analysis")
+                                
+                                # Collect all figures for PDF export
+                                all_figures_for_pdf = []
+                                
+                                # Option to view all at once or individually
+                                view_option = st.radio(
+                                    "Choose view option:",
+                                    ["📁 Organized Folders (Recommended)", "📋 All Charts Expanded"],
+                                    key="batch_cai_view_option"
+                                )
+                                
+                                colors = get_consistent_color_palette(len(cai_sequences), "analysis")
+                                
+                                if view_option == "📁 Organized Folders (Recommended)":
+                                    # Group sequences into folders of 5
+                                    folder_size = 5
+                                    num_folders = (len(cai_sequences) + folder_size - 1) // folder_size
+                                    
+                                    for folder_idx in range(num_folders):
+                                        start_idx = folder_idx * folder_size
+                                        end_idx = min((folder_idx + 1) * folder_size, len(cai_sequences))
+                                        folder_sequences = cai_sequences[start_idx:end_idx]
                                         
-                                        # Statistics including GC content
-                                        col_stat1, col_stat2, col_stat3, col_stat4, col_stat5 = st.columns(5)
-                                        with col_stat1:
-                                            st.metric("Average CAI", f"{np.mean(cai_weights):.3f}")
-                                        with col_stat2:
-                                            st.metric("Min CAI", f"{np.min(cai_weights):.3f}")
-                                        with col_stat3:
-                                            st.metric("Max CAI", f"{np.max(cai_weights):.3f}")
-                                        with col_stat4:
-                                            low_cai_count = sum(1 for w in cai_weights if w < 0.5)
-                                            st.metric("Low CAI (<0.5)", f"{low_cai_count}/{len(cai_weights)}")
-                                        with col_stat5:
-                                            # Calculate GC content for this sequence
-                                            gc_content = calculate_gc_content(seq_sequence)
-                                            st.metric("GC Content", f"{gc_content:.1f}%")
+                                        with st.expander(f"📁 Sequences {start_idx + 1}-{end_idx} ({len(folder_sequences)} sequences)", expanded=False):
+                                            for i, selected_data in enumerate(folder_sequences):
+                                                df = selected_data['cai_data']
+                                                seq_name = selected_data['name']
+                                                seq_sequence = selected_data['sequence']
+                                                color_idx = start_idx + i
+                                                
+                                                st.markdown(f"##### 📊 {seq_name}")
+                                                
+                                                if not df.empty and 'CAI_Weight' in df.columns:
+                                                    positions = df['Position'].tolist()
+                                                    cai_weights = df['CAI_Weight'].tolist()
+                                                    amino_acids = df['Amino_Acid'].tolist()
+                                                    
+                                                    # Create interactive plot with GC content
+                                                    color = colors[color_idx % len(colors)]
+                                                    fig = create_interactive_cai_gc_plot(
+                                                        positions, 
+                                                        cai_weights, 
+                                                        amino_acids, 
+                                                        seq_sequence, 
+                                                        seq_name,
+                                                        color
+                                                    )
+                                                    
+                                                    st.plotly_chart(fig, use_container_width=True)
+                                                    
+                                                    # Add to PDF collection
+                                                    all_figures_for_pdf.append({
+                                                        'type': 'plotly',
+                                                        'figure': fig,
+                                                        'title': f'CAI Analysis - {seq_name}'
+                                                    })
+                                                    
+                                                    # Statistics
+                                                    col_stat1, col_stat2, col_stat3, col_stat4, col_stat5 = st.columns(5)
+                                                    with col_stat1:
+                                                        st.metric("Average CAI", f"{np.mean(cai_weights):.3f}")
+                                                    with col_stat2:
+                                                        st.metric("Min CAI", f"{np.min(cai_weights):.3f}")
+                                                    with col_stat3:
+                                                        st.metric("Max CAI", f"{np.max(cai_weights):.3f}")
+                                                    with col_stat4:
+                                                        low_cai_count = sum(1 for w in cai_weights if w < 0.5)
+                                                        st.metric("Low CAI (<0.5)", f"{low_cai_count}/{len(cai_weights)}")
+                                                    with col_stat5:
+                                                        gc_content = calculate_gc_content(seq_sequence)
+                                                        st.metric("GC Content", f"{gc_content:.1f}%")
+                                                    
+                                                    st.divider()
+                                
+                                else:  # All Charts Expanded
+                                    for i, selected_data in enumerate(cai_sequences):
+                                        df = selected_data['cai_data']
+                                        seq_name = selected_data['name']
+                                        seq_sequence = selected_data['sequence']
                                         
-                                        # Data table in expandable section
-                                        with st.expander(f"📋 View detailed In-Frame data for {seq_name}"):
-                                            st.dataframe(df, use_container_width=True)
+                                        st.markdown(f"### 📊 Interactive In-Frame Analysis for: {seq_name}")
                                         
-                                        st.divider()  # Add separator between sequences
-                                    else:
-                                        st.warning(f"No In-Frame data available for {seq_name}")
+                                        if not df.empty and 'CAI_Weight' in df.columns:
+                                            positions = df['Position'].tolist()
+                                            cai_weights = df['CAI_Weight'].tolist()
+                                            amino_acids = df['Amino_Acid'].tolist()
+                                            
+                                            # Create interactive plot with GC content
+                                            color = colors[i % len(colors)]
+                                            fig = create_interactive_cai_gc_plot(
+                                                positions, 
+                                                cai_weights, 
+                                                amino_acids, 
+                                                seq_sequence, 
+                                                seq_name,
+                                                color
+                                            )
+                                            
+                                            st.plotly_chart(fig, use_container_width=True)
+                                            
+                                            # Add to PDF collection
+                                            all_figures_for_pdf.append({
+                                                'type': 'plotly',
+                                                'figure': fig,
+                                                'title': f'CAI Analysis - {seq_name}'
+                                            })
+                                            
+                                            # Statistics
+                                            col_stat1, col_stat2, col_stat3, col_stat4, col_stat5 = st.columns(5)
+                                            with col_stat1:
+                                                st.metric("Average CAI", f"{np.mean(cai_weights):.3f}")
+                                            with col_stat2:
+                                                st.metric("Min CAI", f"{np.min(cai_weights):.3f}")
+                                            with col_stat3:
+                                                st.metric("Max CAI", f"{np.max(cai_weights):.3f}")
+                                            with col_stat4:
+                                                low_cai_count = sum(1 for w in cai_weights if w < 0.5)
+                                                st.metric("Low CAI (<0.5)", f"{low_cai_count}/{len(cai_weights)}")
+                                            with col_stat5:
+                                                gc_content = calculate_gc_content(seq_sequence)
+                                                st.metric("GC Content", f"{gc_content:.1f}%")
+                                            
+                                            # Data table in expandable section
+                                            with st.expander(f"📋 View detailed In-Frame data for {seq_name}"):
+                                                st.dataframe(df, use_container_width=True)
+                                            
+                                            st.divider()
+                                        else:
+                                            st.warning(f"No In-Frame data available for {seq_name}")
+                                
+                                # PDF Export for entire batch
+                                if all_figures_for_pdf:
+                                    st.markdown("#### 📄 Export Complete Batch Report")
+                                    pdf_data = create_pdf_export(all_figures_for_pdf, f"Batch_InFrame_Analysis_{len(sequences)}_sequences")
+                                    st.download_button(
+                                        label="📄 Export Complete Batch PDF Report",
+                                        data=pdf_data,
+                                        file_name=f"Batch_InFrame_Analysis_{len(sequences)}_sequences.pdf",
+                                        mime="application/pdf",
+                                        help="Download PDF report with all CAI analysis charts"
+                                    )
                             else:
                                 st.warning("No valid In-Frame data found for any sequences")
 
@@ -4310,121 +4298,7 @@ def main():
                                     else:
                                         st.info("No sequences with +1 frame stops found for individual visualization.")
                                 
-                                # BATCH IMMUNOGENIC PEPTIDE SCANNING - NEW SECTION
-                                    epitope_df = load_immunogenic_peptides()
-                                    
-                                    if not epitope_df.empty:
-                                        st.subheader("🔬 Batch Immunogenic Peptide Scanning")
-                                        
-                                        batch_epitope_findings = []
-                                        sequences_with_epitopes = 0
-                                        total_epitopes_found = 0
-                                        
-                                        with st.spinner("Scanning all sequences for immunogenic peptides..."):
-                                            progress_epitope = st.progress(0)
-                                            status_epitope = st.empty()
-                                            
-                                            for i, (name, seq) in enumerate(sequences):
-                                                status_epitope.text(f"Scanning {name} for epitopes... ({i+1}/{len(sequences)})")
-                                                
-                                                # Translate +1 and -1 frames
-                                                plus1_protein = translate_frame(seq, 1)
-                                                minus1_protein = translate_frame(seq, 2)
-                                                
-                                                # Scan for immunogenic peptides
-                                                plus1_findings = scan_for_immunogenic_peptides(plus1_protein, epitope_df, "+1 Frame")
-                                                minus1_findings = scan_for_immunogenic_peptides(minus1_protein, epitope_df, "-1 Frame")
-                                                
-                                                # Record findings for this sequence
-                                                if plus1_findings or minus1_findings:
-                                                    sequences_with_epitopes += 1
-                                                    
-                                                    for finding in plus1_findings + minus1_findings:
-                                                        finding['sequence_name'] = name
-                                                        finding['sequence_length'] = len(seq)
-                                                        batch_epitope_findings.append(finding)
-                                                        total_epitopes_found += 1
-                                                
-                                                progress_epitope.progress((i + 1) / len(sequences))
-                                            
-                                            # Clear progress indicators
-                                            progress_epitope.empty()
-                                            status_epitope.empty()
-                                        
-                                        # Display batch epitope scanning results
-                                        scan_col1, scan_col2, scan_col3, scan_col4 = st.columns(4)
-                                        with scan_col1:
-                                            st.metric("Sequences Scanned", len(sequences))
-                                        with scan_col2:
-                                            st.metric("Sequences with Epitopes", sequences_with_epitopes)
-                                        with scan_col3:
-                                            st.metric("Total Epitopes Found", total_epitopes_found)
-                                        with scan_col4:
-                                            epitope_rate = (sequences_with_epitopes / len(sequences) * 100) if len(sequences) > 0 else 0
-                                            st.metric("Epitope Rate", f"{epitope_rate:.1f}%")
-                                        
-                                        if total_epitopes_found > 0:
-                                            st.warning(f"⚠️ **BATCH ALERT**: Found {total_epitopes_found} immunogenic peptides across {sequences_with_epitopes} sequences!")
-                                            
-                                            # Create batch epitope summary
-                                            if batch_epitope_findings:
-                                                batch_epitope_df = pd.DataFrame(batch_epitope_findings)
-                                                
-                                                # Reorder columns for better display
-                                                priority_cols = ['sequence_name', 'frame', 'epitope', 'position', 'end_position', 'length']
-                                                other_cols = [col for col in batch_epitope_df.columns if col not in priority_cols]
-                                                batch_epitope_df = batch_epitope_df[priority_cols + other_cols]
-                                                
-                                                st.subheader("📋 Batch Epitope Findings Summary")
-                                                st.dataframe(batch_epitope_df, use_container_width=True, hide_index=True)
-                                                
-                                                # Summary by sequence
-                                                st.subheader("📊 Epitope Summary by Sequence")
-                                                
-                                                epitope_summary = batch_epitope_df.groupby(['sequence_name', 'frame']).size().reset_index(name='epitope_count')
-                                                epitope_pivot = epitope_summary.pivot(index='sequence_name', columns='frame', values='epitope_count').fillna(0).astype(int)
-                                                
-                                                if '+1 Frame' not in epitope_pivot.columns:
-                                                    epitope_pivot['+1 Frame'] = 0
-                                                if '-1 Frame' not in epitope_pivot.columns:
-                                                    epitope_pivot['-1 Frame'] = 0
-                                                
-                                                epitope_pivot['Total'] = epitope_pivot['+1 Frame'] + epitope_pivot['-1 Frame']
-                                                epitope_pivot = epitope_pivot.sort_values('Total', ascending=False)
-                                                
-                                                st.dataframe(epitope_pivot, use_container_width=True)
-                                                
-                                                # Interactive chart showing epitope distribution
-                                                if len(epitope_pivot) > 0:
-                                                    st.subheader("📊 Interactive Epitope Distribution")
-                                                    
-                                                    epitope_chart_data = {
-                                                        '+1 Frame': epitope_pivot['+1 Frame'].tolist(),
-                                                        '-1 Frame': epitope_pivot['-1 Frame'].tolist()
-                                                    }
-                                                    
-                                                    epitope_fig = create_interactive_stacked_bar_chart(
-                                                        epitope_pivot.index.tolist(),
-                                                        epitope_chart_data,
-                                                        'Immunogenic Peptides Found by Sequence',
-                                                        'Number of Epitopes'
-                                                    )
-                                                    st.plotly_chart(epitope_fig, use_container_width=True)
-                                                
-                                                # Download batch epitope findings
-                                                excel_data = create_download_link(batch_epitope_df, f"Batch_Immunogenic_Peptides_{total_epitopes_found}_epitopes.xlsx")
-                                                st.download_button(
-                                                    label="📥 Download Batch Epitope Findings (Excel)",
-                                                    data=excel_data,
-                                                    file_name=f"Batch_Immunogenic_Peptides_{total_epitopes_found}_epitopes.xlsx",
-                                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                                    help="Download complete list of immunogenic peptides found across all sequences"
-                                                )
-                                        else:
-                                            st.success("✅ **Excellent**: No known immunogenic peptides found in any sequence!")
-                                    
-                                    else:
-                                        st.info("ℹ️ Batch immunogenic peptide scanning disabled - epitope_table_export.xlsx not found")
+                                
                                 
                                 if total_stops > 0:
                                     # Interactive summary charts with breakdown by stop codon type
@@ -5876,75 +5750,13 @@ def main():
 
                     # Step 5: Perform and display the final analysis
                     st.subheader("📊 Final Analysis")
-
+                    
                     # The context for frame analysis must include the 5' UTR to find the junctional ACCATG
                     analysis_context_sequence = JT_5_UTR + full_cds
-
+                    
                     # Detailed stats table (using the full, correct CDS)
                     summary_df = generate_detailed_mrna_summary(full_cds, final_mrna_sequence, JT_5_UTR, JT_3_UTR)
                     st.dataframe(summary_df, use_container_width=True, hide_index=True)
-
-                    # ADD IMMUNOGENIC PEPTIDE SCANNING HERE
-                    epitope_df = load_immunogenic_peptides()
-
-                    if not epitope_df.empty:
-                        st.subheader("🔬 Immunogenic Peptide Scanning (mRNA Design)")
-                        
-                        # Translate +1 and -1 frames of the full CDS
-                        plus1_protein = translate_frame(full_cds, 1)  # +1 frame
-                        minus1_protein = translate_frame(full_cds, 2)  # -1 frame (offset by 2 to get -1)
-                        
-                        # Scan for immunogenic peptides
-                        plus1_findings = scan_for_immunogenic_peptides(plus1_protein, epitope_df, "+1 Frame")
-                        minus1_findings = scan_for_immunogenic_peptides(minus1_protein, epitope_df, "-1 Frame")
-                        
-                        total_findings = len(plus1_findings) + len(minus1_findings)
-                        
-                        # Display summary metrics
-                        scan_col1, scan_col2, scan_col3, scan_col4 = st.columns(4)
-                        with scan_col1:
-                            st.metric("Epitopes in +1 Frame", len(plus1_findings))
-                        with scan_col2:
-                            st.metric("Epitopes in -1 Frame", len(minus1_findings))
-                        with scan_col3:
-                            st.metric("Total Epitopes Found", total_findings)
-                        with scan_col4:
-                            st.metric("Epitopes in Database", len(epitope_df))
-                        
-                        if total_findings > 0:
-                            st.warning(f"⚠️ **mRNA DESIGN ALERT**: Found {total_findings} immunogenic peptides in alternative reading frames!")
-                            
-                            # Create detailed summary
-                            summary_df_epitopes = create_immunogenic_peptide_summary(plus1_findings, minus1_findings)
-                            if summary_df_epitopes is not None:
-                                st.subheader("📋 Detailed Epitope Findings")
-                                st.dataframe(summary_df_epitopes, use_container_width=True, hide_index=True)
-                                
-                                # Show frame-specific details
-                                if plus1_findings:
-                                    with st.expander(f"🔍 +1 Frame Epitopes ({len(plus1_findings)} found)", expanded=True):
-                                        for i, finding in enumerate(plus1_findings, 1):
-                                            st.write(f"**{i}.** `{finding['epitope']}` at position {finding['position']}-{finding['end_position']}")
-                                
-                                if minus1_findings:
-                                    with st.expander(f"🔍 -1 Frame Epitopes ({len(minus1_findings)} found)", expanded=True):
-                                        for i, finding in enumerate(minus1_findings, 1):
-                                            st.write(f"**{i}.** `{finding['epitope']}` at position {finding['position']}-{finding['end_position']}")
-                                
-                                # Download button for epitope findings
-                                excel_data = create_download_link(summary_df_epitopes, f"mRNA_Design_Immunogenic_Peptides_{len(summary_df_epitopes)}.xlsx")
-                                st.download_button(
-                                    label="📥 Download mRNA Epitope Findings (Excel)",
-                                    data=excel_data,
-                                    file_name=f"mRNA_Design_Immunogenic_Peptides_{len(summary_df_epitopes)}.xlsx",
-                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                    help="Download complete list of found immunogenic peptides in mRNA design"
-                                )
-                        else:
-                            st.success("✅ **Good news**: No known immunogenic peptides found in +1 or -1 reading frames of your mRNA design!")
-
-                    else:
-                        st.info("ℹ️ Immunogenic peptide scanning disabled - epitope_table_export.xlsx not found")
 
                     # Top row: CAI/GC and +1 Stop Pie Chart
                     col_chart1, col_chart2 = st.columns([3, 1])
@@ -6019,66 +5831,121 @@ def main():
                 if st.session_state.cancer_vaccine_peptides[key]:
                     peptide_sequences.append(st.session_state.cancer_vaccine_peptides[key])
             
-            # Step 3: Select linker
-            st.markdown("#### Linker Selection")
-            
-            LINKER_OPTIONS = {
-                "(G₄S)n linker": {
-                    "sequence_aa": "GGGGS",
-                    "type": "Flexible",
-                    "purpose": "Most widely used linker; adds flexibility between domains to reduce steric clash"
-                },
-                "EAAAK linker": {
-                    "sequence_aa": "EAAAK",
-                    "type": "Rigid (helical)",
-                    "purpose": "Promotes α-helix formation; keeps domains structurally separate"
-                },
-                "HE Linker": {
-                    "sequence_aa": "HEHEHE",
-                    "type": "Rigid",
-                    "purpose": "Promotes hydrophilic spacing; sometimes used for helical separation"
-                },
-                "AP linker": {
-                    "sequence_aa": "AEAAAKA",
-                    "type": "Rigid",
-                    "purpose": "Engineered rigid helix; used for mechanical separation of domains"
-                },
-                "(XP)n linker": {
-                    "sequence_aa": "GPGPG",
-                    "type": "Flexible/Spacer",
-                    "purpose": "T cell epitope spacers (seen in multi-epitope vaccines)"
-                },
-                "AAY linker": {
-                    "sequence_aa": "AAY",
-                    "type": "Cleavable",
-                    "purpose": "Used in epitope fusion vaccines; recognized by immunoproteasome"
-                },
-                "GPGPG linker": {
-                    "sequence_aa": "GPGPG",
-                    "type": "Flexible",
-                    "purpose": "Used in multi-epitope vaccine constructs; promotes better MHC presentation"
-                },
-                "RRRRRR linker": {
-                    "sequence_aa": "RRRRRR",
-                    "type": "Cell-penetrating",
-                    "purpose": "Enhances delivery, e.g., in peptide-based vaccines or intracellular targeting"
-                },
-                "KFERQ linker": {
-                    "sequence_aa": "KFERQ",
-                    "type": "Degron motif",
-                    "purpose": "Targets proteins for lysosomal degradation (used in autophagy or clearance therapy)"
-                },
-                "ENLYFQG (TEV site)": {
-                    "sequence_aa": "ENLYFQG",
-                    "type": "Protease site",
-                    "purpose": "Cleavable linker for conditional release (TEV protease)"
-                },
-                "LVPRGS (Thrombin site)": {
-                    "sequence_aa": "LVPRGS",
-                    "type": "Protease site",
-                    "purpose": "Used to cleave fusion tags (e.g., tag–protein constructs)"
+            # Step 3: Select linkers (Enhanced for different positions)
+                st.markdown("#### Linker Selection")
+
+                LINKER_OPTIONS = {
+                    "(G₄S)n linker": {
+                        "sequence_aa": "GGGGS",
+                        "type": "Flexible",
+                        "purpose": "Most widely used linker; adds flexibility between domains to reduce steric clash"
+                    },
+                    "EAAAK linker": {
+                        "sequence_aa": "EAAAK",
+                        "type": "Rigid (helical)",
+                        "purpose": "Promotes α-helix formation; keeps domains structurally separate"
+                    },
+                    "HE Linker": {
+                        "sequence_aa": "HEHEHE",
+                        "type": "Rigid",
+                        "purpose": "Promotes hydrophilic spacing; sometimes used for helical separation"
+                    },
+                    "AP linker": {
+                        "sequence_aa": "AEAAAKA",
+                        "type": "Rigid",
+                        "purpose": "Engineered rigid helix; used for mechanical separation of domains"
+                    },
+                    "(XP)n linker": {
+                        "sequence_aa": "GPGPG",
+                        "type": "Flexible/Spacer",
+                        "purpose": "T cell epitope spacers (seen in multi-epitope vaccines)"
+                    },
+                    "AAY linker": {
+                        "sequence_aa": "AAY",
+                        "type": "Cleavable",
+                        "purpose": "Used in epitope fusion vaccines; recognized by immunoproteasome"
+                    },
+                    "GPGPG linker": {
+                        "sequence_aa": "GPGPG",
+                        "type": "Flexible",
+                        "purpose": "Used in multi-epitope vaccine constructs; promotes better MHC presentation"
+                    },
+                    "RRRRRR linker": {
+                        "sequence_aa": "RRRRRR",
+                        "type": "Cell-penetrating",
+                        "purpose": "Enhances delivery, e.g., in peptide-based vaccines or intracellular targeting"
+                    },
+                    "KFERQ linker": {
+                        "sequence_aa": "KFERQ",
+                        "type": "Degron motif",
+                        "purpose": "Targets proteins for lysosomal degradation (used in autophagy or clearance therapy)"
+                    },
+                    "ENLYFQG (TEV site)": {
+                        "sequence_aa": "ENLYFQG",
+                        "type": "Protease site",
+                        "purpose": "Cleavable linker for conditional release (TEV protease)"
+                    },
+                    "LVPRGS (Thrombin site)": {
+                        "sequence_aa": "LVPRGS",
+                        "type": "Protease site",
+                        "purpose": "Used to cleave fusion tags (e.g., tag–protein constructs)"
+                    }
                 }
-            }
+
+                # Initialize linker selections in session state
+                if 'cancer_vaccine_linkers' not in st.session_state:
+                    st.session_state.cancer_vaccine_linkers = {}
+
+                linker_names = list(LINKER_OPTIONS.keys())
+
+                # Create linker selection for each position
+                linker_selections = []
+                linker_repeats_list = []
+
+                if num_peptides > 1:
+                    st.markdown("**Configure linkers between peptides:**")
+                    
+                    for i in range(1, int(num_peptides)):
+                        linker_key = f"linker_{i}_to_{i+1}"
+                        repeats_key = f"linker_repeats_{i}_to_{i+1}"
+                        
+                        # Initialize if not exists
+                        if linker_key not in st.session_state.cancer_vaccine_linkers:
+                            st.session_state.cancer_vaccine_linkers[linker_key] = linker_names[0]
+                        if repeats_key not in st.session_state.cancer_vaccine_linkers:
+                            st.session_state.cancer_vaccine_linkers[repeats_key] = 1
+                        
+                        col_linker, col_repeats = st.columns([3, 1])
+                        
+                        with col_linker:
+                            selected_linker = st.selectbox(
+                                f"Linker between Peptide {i} and Peptide {i+1}:",
+                                linker_names,
+                                index=linker_names.index(st.session_state.cancer_vaccine_linkers[linker_key]),
+                                key=f"cancer_linker_select_{i}"
+                            )
+                            st.session_state.cancer_vaccine_linkers[linker_key] = selected_linker
+                            linker_selections.append(selected_linker)
+                        
+                        with col_repeats:
+                            if selected_linker in ["(G₄S)n linker", "EAAAK linker", "(XP)n linker"]:
+                                repeats = st.slider(
+                                    f"Repeats:",
+                                    1, 5, 
+                                    st.session_state.cancer_vaccine_linkers[repeats_key],
+                                    key=f"cancer_linker_repeats_{i}"
+                                )
+                                st.session_state.cancer_vaccine_linkers[repeats_key] = repeats
+                                linker_repeats_list.append(repeats)
+                            else:
+                                st.write("1")
+                                linker_repeats_list.append(1)
+                        
+                        # Show linker info
+                        selected_linker_info = LINKER_OPTIONS[selected_linker]
+                        st.caption(f"**{selected_linker_info['type']}** - {selected_linker_info['purpose']}")
+                else:
+                    st.info("Only one peptide selected - no linkers needed.")
             
             # Format linker options for display
             linker_names = list(LINKER_OPTIONS.keys())
@@ -6271,99 +6138,13 @@ def main():
                         
                         # Perform final analysis
                         st.subheader("📊 Final Analysis")
-
+                        
                         # The context for frame analysis must include the 5' UTR to find the junctional ACCATG
                         analysis_context_sequence = JT_5_UTR + processed_cds
-
+                        
                         # Detailed stats table (using the full, correct CDS)
                         summary_df = generate_detailed_mrna_summary(processed_cds, final_mrna_sequence, JT_5_UTR, JT_3_UTR)
                         st.dataframe(summary_df, use_container_width=True, hide_index=True)
-
-                        # ADD IMMUNOGENIC PEPTIDE SCANNING HERE
-                        epitope_df = load_immunogenic_peptides()
-
-                        if not epitope_df.empty:
-                            st.subheader("🔬 Immunogenic Peptide Scanning (Cancer Vaccine)")
-                            
-                            # Translate +1 and -1 frames of the processed CDS
-                            plus1_protein = translate_frame(processed_cds, 1)  # +1 frame
-                            minus1_protein = translate_frame(processed_cds, 2)  # -1 frame (offset by 2 to get -1)
-                            
-                            # Scan for immunogenic peptides
-                            plus1_findings = scan_for_immunogenic_peptides(plus1_protein, epitope_df, "+1 Frame")
-                            minus1_findings = scan_for_immunogenic_peptides(minus1_protein, epitope_df, "-1 Frame")
-                            
-                            total_findings = len(plus1_findings) + len(minus1_findings)
-                            
-                            # Display summary metrics
-                            scan_col1, scan_col2, scan_col3, scan_col4 = st.columns(4)
-                            with scan_col1:
-                                st.metric("Epitopes in +1 Frame", len(plus1_findings))
-                            with scan_col2:
-                                st.metric("Epitopes in -1 Frame", len(minus1_findings))
-                            with scan_col3:
-                                st.metric("Total Epitopes Found", total_findings)
-                            with scan_col4:
-                                st.metric("Epitopes in Database", len(epitope_df))
-                            
-                            if total_findings > 0:
-                                st.warning(f"⚠️ **VACCINE DESIGN ALERT**: Found {total_findings} immunogenic peptides in alternative reading frames!")
-                                
-                                # Show which input peptides might be problematic
-                                st.markdown("**🔍 Analysis of Input Peptides vs Found Epitopes:**")
-                                
-                                # Check if any of the found epitopes overlap with the input peptides
-                                input_peptides_text = " ".join([peptide.strip().upper() for peptide in peptide_sequences])
-                                overlapping_epitopes = []
-                                
-                                for finding in plus1_findings + minus1_findings:
-                                    epitope = finding['epitope']
-                                    if epitope in input_peptides_text:
-                                        overlapping_epitopes.append(finding)
-                                
-                                if overlapping_epitopes:
-                                    st.error(f"🚨 **CRITICAL**: {len(overlapping_epitopes)} epitopes found that match your input peptides!")
-                                    for finding in overlapping_epitopes:
-                                        st.write(f"- `{finding['epitope']}` found in {finding['frame']} at position {finding['position']}")
-                                else:
-                                    st.info("✅ Found epitopes do not directly match your input cancer peptides")
-                                
-                                # Create detailed summary
-                                summary_df_epitopes = create_immunogenic_peptide_summary(plus1_findings, minus1_findings)
-                                if summary_df_epitopes is not None:
-                                    st.subheader("📋 Detailed Epitope Findings")
-                                    st.dataframe(summary_df_epitopes, use_container_width=True, hide_index=True)
-                                    
-                                    # Show frame-specific details
-                                    if plus1_findings:
-                                        with st.expander(f"🔍 +1 Frame Epitopes ({len(plus1_findings)} found)", expanded=True):
-                                            for i, finding in enumerate(plus1_findings, 1):
-                                                st.write(f"**{i}.** `{finding['epitope']}` at position {finding['position']}-{finding['end_position']}")
-                                    
-                                    if minus1_findings:
-                                        with st.expander(f"🔍 -1 Frame Epitopes ({len(minus1_findings)} found)", expanded=True):
-                                            for i, finding in enumerate(minus1_findings, 1):
-                                                st.write(f"**{i}.** `{finding['epitope']}` at position {finding['position']}-{finding['end_position']}")
-                                    
-                                    # Download button for epitope findings
-                                    excel_data = create_download_link(summary_df_epitopes, f"Cancer_Vaccine_Immunogenic_Peptides_{len(summary_df_epitopes)}.xlsx")
-                                    st.download_button(
-                                        label="📥 Download Vaccine Epitope Findings (Excel)",
-                                        data=excel_data,
-                                        file_name=f"Cancer_Vaccine_Immunogenic_Peptides_{len(summary_df_epitopes)}.xlsx",
-                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                        help="Download complete list of found immunogenic peptides in cancer vaccine design"
-                                    )
-                            else:
-                                st.success("✅ **Excellent**: No known immunogenic peptides found in +1 or -1 reading frames of your cancer vaccine!")
-
-                        else:
-                            st.info("ℹ️ Immunogenic peptide scanning disabled - epitope_table_export.xlsx not found")
-
-                        # Continue with existing CAI/GC analysis...
-                        # CAI/GC Plot and +1 Stop Pie Chart
-                        col_chart1, col_chart2 = st.columns([3, 1])
-                        # ... rest of your existing code
                         
                         # CAI/GC Plot and +1 Stop Pie Chart
                         col_chart1, col_chart2 = st.columns([3, 1])
