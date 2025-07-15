@@ -1,180 +1,163 @@
-# DNA Codon Optimization Tool - Streamlit Version
+Harmonized Optimization of Oligos and Frames (HOOF)
+A comprehensive DNA sequence optimization and analysis tool for bioinformatics research, with integrated database search and patent research capabilities.
+Features
+Core Optimization Methods
 
-A professional bioinformatics application for DNA sequence optimization and analysis, featuring multiple optimization algorithms and comprehensive analytical capabilities.
+Standard Codon Optimization: Uses most frequent codons for each amino acid
+In-Frame Analysis: Calculates Codon Adaptation Index (CAI) with interactive 10bp GC content windows
+Balanced Optimization: Advanced algorithm considering codon usage and +1 frame effects
+NC Stop Codon Optimization: Specialized for alternative reading frame stop codon creation
+JT Plus1 Stop Optimization: Creates specific stop motifs in +1 frame
++1 Frame Analysis: Comprehensive analysis including slippery motifs and immunogenic peptide scanning
 
-## Features
+Database Search & Integration
 
-### Optimization Methods
-- **Standard Codon Optimization**: Uses most frequent codons for each amino acid
-- **CAI Weight Analysis**: Calculates Codon Adaptation Index for sequence quality assessment
-- **Balanced Optimization**: Advanced algorithm considering codon usage and +1 frame effects
-- **NC Stop Codon Optimization**: Specialized for alternative reading frame stop codon creation
-- **JT Plus1 Stop Optimization**: Creates specific stop motifs in +1 frame
-- **Sequence Analysis**: Comprehensive analysis including slippery motifs and frame analysis
+NCBI CDS Extraction: Automated search and extraction of coding sequences
+UniProt Integration: Search protein database and retrieve linked nucleotide sequences
+Patent Search: AI-powered search of Google Patents for molecular biology technologies
+Multi-Database Search: Simultaneous search across multiple databases with intelligent ranking
 
-### Research & Patents (NEW!)
-- **Patent Search**: AI-powered search of Google Patents for molecular biology technologies
-- **NCBI Sequence Search**: Google-powered search of NCBI nucleotide database
-- **AI-Powered Analysis**: Anthropic Claude integration for intelligent sequence and patent analysis
-- **Research Integration**: Analyze NCBI sequences with codon optimization tools
-- **Unified API**: Both searches use SERPER API for consistent, reliable results
+mRNA Design Tools
 
-### Capabilities
-- Single sequence processing with real-time validation
-- Batch processing for multiple sequences (FASTA or text format)
-- Result accumulation and management
-- Professional Excel export functionality
-- Interactive visualizations for analysis results
-- Configurable algorithm parameters
+Full mRNA Design: Create complete mRNA sequences with 5' UTR, CDS, and 3' UTR
+Signal Peptide Integration: Library of common signal peptides for protein targeting
+Cancer Vaccine Design: Multi-peptide vaccine construction with customizable linkers
+GC Content Optimization: Automatic GC content correction and local window enforcement
 
-## Installation
+Interactive Analysis
 
-### Prerequisites
-- Python 3.8 or higher
-- Virtual environment (recommended)
+Real-time Visualizations: Interactive Plotly charts with hover details and zoom capabilities
+Dual-axis Plots: CAI weights and GC content displayed simultaneously
+Immunogenic Peptide Scanning: Automated detection of known immunogenic sequences
+Batch Processing: Process multiple sequences with comparative analysis
 
-### Setup
-1. Clone or download the application files
-2. Create and activate a virtual environment:
-   ```bash
-   python3 -m venv .venv
-   source .venv/bin/activate  # On macOS/Linux
-   # or
-   .venv\Scripts\activate     # On Windows
-   ```
+Installation
+Requirements
+bashCopypip install streamlit pandas numpy matplotlib plotly biopython openpyxl requests beautifulsoup4 python-dotenv anthropic
+Required Files
 
-3. Install required packages:
-   ```bash
-   pip install -r requirements.txt
-   ```
+HumanCodons.xlsx: Codon usage frequency data (auto-loaded if present)
+epitope_table_export.xlsx: Immunogenic peptide database (optional)
+.env: API configuration file
 
-### API Configuration (Optional - for Research & Patents)
+API Configuration
+Create a .env file in your application directory:
+envCopySERPER_API_KEY=your_serper_api_key_here
+ANTHROPIC_API=your_anthropic_api_key_here
+Usage
+Running the Application
+bashCopystreamlit run main.py
+Basic Workflow
 
-To use the new Research & Patents functionality, set up API keys:
+Single Sequence Analysis: Paste DNA sequence and select optimization method
+Database Search: Search for specific proteins and extract CDS sequences
+Batch Processing: Upload multiple sequences for comparative analysis
+mRNA Design: Create full mRNA constructs with UTRs and signal peptides
+Patent Research: Search for relevant technologies and extract sequences
 
-1. **Create a `.env` file** in the project directory:
-   ```bash
-   # SERPER API Key for patent search (free tier: 2,500 searches)
-   SERPER_API_KEY=your_serper_api_key_here
+File Formats
 
-   # Anthropic API Key for AI analysis
-   ANTHROPIC_API=your_anthropic_api_key_here
-   ```
+Input: DNA sequences (plain text, FASTA), Excel files for batch processing
+Output: Excel files with comprehensive analysis, FASTA sequences
 
-2. **Get API Keys:**
-   - **SERPER API**: Free account at https://serper.dev/
-   - **Anthropic API**: Account at https://console.anthropic.com/
+Key Features
+Immunogenic Peptide Scanning
 
-3. **See `RESEARCH_SETUP.md`** for detailed setup instructions
+Automatic detection of known immunogenic peptides in alternative reading frames
+Database of epitopes for vaccine safety assessment
+Frame-specific analysis (+1 and -1 reading frames)
 
-## Usage
+Interactive Visualizations
 
-### Starting the Application
-```bash
-streamlit run streamlit_app.py
-```
+CAI Analysis: Interactive plots showing codon adaptation index trends
+GC Content Windows: Real-time GC content analysis in sliding windows
+Stop Codon Distribution: Pie charts and bar graphs for stop codon analysis
+Batch Comparisons: Side-by-side optimization comparisons
 
-The application will open in your default web browser at `http://localhost:8501`
+Database Integration
 
-### Required Files
-Before using the application, you'll need a codon usage frequency file:
-- Format: Excel (.xlsx)
-- Required columns: `triplet`, `amino_acid`, `fraction`
-- Example: `HumanCodons.xlsx`
+Targeted Search: Find specific proteins using descriptive terms
+Cross-Reference Mining: Automatic retrieval of nucleotide sequences from protein databases
+Quality Validation: Checks for valid DNA sequences before optimization
+Seamless Transfer: Direct integration between search and optimization tools
 
-Upload this file using the "Upload Codon Usage File" option in the sidebar.
+Advanced Analysis
 
-### Basic Workflow
+Slippery Motif Detection: Identification of ribosomal frameshifting sites
+Alternative Frame Analysis: Comprehensive +1 and -1 frame stop codon analysis
+Protein Translation: Automatic translation and validation
+Sequence Metrics: GC content, CAI scores, sequence length analysis
 
-#### Single Sequence Optimization
-1. Upload your codon usage file in the sidebar
-2. Navigate to the "Single Sequence" tab
-3. Paste your DNA sequence in the text area
-4. Select an optimization method
-5. Click "Run Optimization"
-6. View results and download if needed
+File Structure
+Copy├── main.py                          # Main application file
+├── HumanCodons.xlsx                 # Codon usage data
+├── epitope_table_export.xlsx        # Immunogenic peptide database
+├── .env                             # API configuration
+├── README.md                        # This file
+└── requirements.txt                 # Python dependencies
+API Requirements
+SERPER API (Required for database searches)
 
-#### Batch Processing
-1. Navigate to the "Batch Processing" tab
-2. Upload a sequence file (FASTA or text format)
-3. Select optimization method
-4. Click "Process Batch"
-5. Download batch results
+Used for Google-based searches (NCBI, Patents)
+Sign up at: https://serper.dev/
+Free tier available with usage limits
 
-#### Result Management
-- Enable "Accumulate Results" in sidebar to collect multiple single-sequence results
-- View accumulated results in the "Accumulated Results" tab
-- Download combined results as Excel files
+Anthropic API (Optional, for AI analysis)
 
-### Input Requirements
+Used for intelligent sequence ranking and analysis
+Sign up at: https://console.anthropic.com/
+Provides enhanced search result ranking
 
-#### DNA Sequences
-- Valid bases: A, T, G, C (U will be converted to T)
-- Spaces and newlines are automatically removed
-- Sequence length should be a multiple of 3 for optimal results
+UniProt REST API
 
-#### Batch Files
-- **FASTA format**: Standard FASTA with `>header` lines
-- **Text format**: One sequence per line
+No API key required
+Used for protein database searches
+Free public access
 
-## Configuration
+Use Cases
+Research Applications
 
-### Algorithm Settings
-- **Bias Weight**: Adjusts the weight for +1 frame stop codon bias in balanced optimization (0.1 - 5.0)
+Codon Optimization: Optimize sequences for protein expression
+Vaccine Development: Design multi-epitope vaccines with safety analysis
+Comparative Genomics: Find and analyze homologous sequences
+Patent Research: Discover existing technologies and extract sequences
 
-### Output Options
-- Results are provided as Excel files with professional formatting
-- All downloads include comprehensive metadata and analysis details
+Educational Applications
 
-## Technical Details
+Sequence Analysis Training: Interactive tools for learning bioinformatics
+Protein Expression Projects: Source sequences for cloning experiments
+Database Mining: Learn to search and extract biological data
 
-### Optimization Algorithms
+Industrial Applications
 
-#### Standard Codon Optimization
-Uses the most frequently used codon for each amino acid based on the provided codon usage table.
+Biotech R&D: Sequence optimization for commercial applications
+IP Research: Patent landscape analysis for molecular biology
+Quality Control: Batch processing and validation of sequences
 
-#### Balanced Optimization
-Advanced algorithm that considers:
-- Codon usage frequency
-- +1 frame stop codon creation
-- Two-codon and single-codon substitution strategies
+Troubleshooting
+Common Issues
 
-#### Sequence Analysis
-Provides comprehensive analysis including:
-- Coding sequence identification (ATG start, stop codons)
-- +1 frame stop codon counting
-- Slippery motif detection (TTTT, TTTC)
-- Statistical metrics and visualizations
+API Connection Errors: Check your .env file configuration
+File Not Found: Ensure HumanCodons.xlsx is in the application directory
+Memory Issues: Reduce batch size for large datasets
+Slow Performance: Check internet connection for database searches
 
-### Performance
-- Real-time sequence validation
-- Efficient batch processing with progress tracking
-- Caching for improved performance on repeated operations
+Support
 
-## File Structure
-```
-├── streamlit_app.py          # Main application
-├── requirements.txt          # Python dependencies
-├── README.md                # This file
-├── v1.8.py                  # Original Tkinter version (reference)
-└── HumanCodons.xlsx         # Codon usage data (required)
-```
+Check the "About" tab in the application for detailed feature descriptions
+Test API connections using the built-in connection test buttons
+Review the troubleshooting tips provided in error messages
 
-## Dependencies
-- streamlit
-- pandas
-- numpy
-- matplotlib
-- biopython
-- openpyxl
-- xlsxwriter
+Version Information
+Current Version: v2.5 (Interactive Visualizations & Enhanced Analysis)
+Recent Updates
 
-## Version History
-- **Streamlit v1.0**: Complete conversion from Tkinter to web-based interface
-- **Tkinter v1.8**: Original desktop application version
+Interactive Plotly visualizations with hover details
+10bp GC content window analysis
+Enhanced immunogenic peptide scanning
+Cancer vaccine design workflow
+Improved user interface and experience
 
-## Support
-For issues or questions, refer to the "About" tab within the application for detailed method descriptions and requirements.
+License
+This software is provided for research and educational purposes. Please ensure compliance with relevant terms of service for external APIs and databases.
 
-## License
-This tool is designed for academic and research use in bioinformatics and molecular biology applications. 
