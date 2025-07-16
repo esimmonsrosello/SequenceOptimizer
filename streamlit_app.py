@@ -3354,6 +3354,7 @@ def create_immunogenic_peptide_summary(findings_plus1, findings_minus1):
         finding_copy = finding.copy()
         finding_copy['frame'] = '-1 Frame'
         all_findings.append(finding_copy)
+        
     
     if not all_findings:
         return None
