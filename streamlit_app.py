@@ -217,17 +217,94 @@ def calculate_gc_window(sequence, position, window_size=25):
     return (gc_count / len(window_seq)) * 100
 
 @st.cache_data
-def load_immunogenic_peptides(file_path="epitope_table_export.xlsx"):
-    """Load immunogenic peptides from Excel file"""
+def load_immunogenic_peptides(file_paths=None):
+    """
+    Load immunogenic peptides from a list of Excel files.
+    Tries all files in order and concatenates the results.
+    """
+    import os
+    import pandas as pd
+
+    if file_paths is None or len(file_paths) == 0:
+        st.warning("No epitope file paths provided. Immunogenic peptide scanning disabled.")
+        return pd.DataFrame()
+
+    dataframes = []
+    for file_path in file_paths:
+        if os.path.exists(file_path):
+            try:
+                df = pd.read_excel(file_path)
+                
+                # Clean column names
+                df.columns = df.columns.str.strip()
+                
+                # Handle duplicate columns
+                seen_columns = {}
+                new_columns = []
+                for col in df.columns:
+                    if col in seen_columns:
+                        seen_columns[col] += 1
+                        new_columns.append(f"{col}_{seen_columns[col]}")
+                    else:
+                        seen_columns[col] = 0
+                        new_columns.append(col)
+                df.columns = new_columns
+                
+                # Identify Name column
+                name_column = None
+                possible_name_columns = ['Name', 'Name_1', 'Name_2', 'Name_3']
+                for col in possible_name_columns:
+                    if col in df.columns:
+                        name_column = col
+                        break
+                if name_column is None and len(df.columns) >= 3:
+                    name_column = df.columns[2]
+                if name_column is None:
+                    st.error(f"Could not find Name column in file {file_path}. Skipping this file.")
+                    continue
+                
+                # Clean and filter data
+                df_clean = df.dropna(subset=[name_column])
+                df_clean = df_clean[df_clean[name_column].notna()]
+                df_clean[name_column] = df_clean[name_column].astype(str).str.upper().str.strip()
+                df_clean = df_clean[df_clean[name_column].str.len() >= 3]
+                df_clean = df_clean[df_clean[name_column] != 'NAN']
+                df_clean = df_clean[df_clean[name_column] != '']
+
+                # Store the name column for reference
+                df_clean.attrs['epitope_column'] = name_column
+                
+                dataframes.append(df_clean)
+                st.success(f"Loaded {len(df_clean)} peptides from '{os.path.basename(file_path)}'")
+            
+            except Exception as e:
+                st.error(f"Error loading epitope file {file_path}: {str(e)}")
+                st.write(f"**Debug - Exception details:** {e}")
+        else:
+            st.warning(f"Epitope file {file_path} not found. Skipping.")
+    
+    if len(dataframes) == 0:
+        st.warning("No epitope data loaded from any files.")
+        return pd.DataFrame()
+    
+    # Concatenate all loaded dataframes, reset index
+    combined_df = pd.concat(dataframes, ignore_index=True)
+    
+    # You may want to keep only unique rows if duplicates exist
+    combined_df = combined_df.drop_duplicates(subset=[combined_df.attrs.get('epitope_column', 'Name')])
+    
+    st.success(f"Total immunogenic peptides loaded: {len(combined_df)}")
+    return combined_df
+
+
+def load_epitope_file(file_path):
     try:
         if os.path.exists(file_path):
             df = pd.read_excel(file_path)
-            
-            
-            
-            # Clean column names - remove extra spaces and handle duplicates
+
+            # Clean column names - remove extra spaces
             df.columns = df.columns.str.strip()
-            
+
             # Handle duplicate column names by keeping only the first occurrence
             seen_columns = {}
             new_columns = []
@@ -238,50 +315,40 @@ def load_immunogenic_peptides(file_path="epitope_table_export.xlsx"):
                 else:
                     seen_columns[col] = 0
                     new_columns.append(col)
-            
             df.columns = new_columns
-            
-            
-            
+
             # Look for the Name column (should be the 3rd column based on your structure)
             name_column = None
             possible_name_columns = ['Name', 'Name_1', 'Name_2', 'Name_3']
-            
+
             for col in possible_name_columns:
                 if col in df.columns:
                     name_column = col
                     break
-            
-            # If still not found, try to find it by position (3rd column)
+
+            # If still not found, use the 3rd column position
             if name_column is None and len(df.columns) >= 3:
-                name_column = df.columns[2]  # 3rd column (0-indexed)
-                
-            
+                name_column = df.columns[2]  # 0-indexed
+
             if name_column is None:
                 st.error(f"Could not find Name column. Available columns: {list(df.columns)}")
                 return pd.DataFrame()
-            
-            
-            
-            
-            
+
             # Clean and prepare the data
             df_clean = df.dropna(subset=[name_column])
             df_clean = df_clean[df_clean[name_column].notna()]
             df_clean[name_column] = df_clean[name_column].astype(str).str.upper().str.strip()
-            
+
             # Filter out very short sequences and invalid entries
             df_clean = df_clean[df_clean[name_column].str.len() >= 3]
             df_clean = df_clean[df_clean[name_column] != 'NAN']
             df_clean = df_clean[df_clean[name_column] != '']
-            
+
             # Store the column name for later use
             df_clean.attrs['epitope_column'] = name_column
-            
+
             st.success(f"Loaded {len(df_clean)} immunogenic peptides from column '{name_column}'")
-            
-           
-            
+
             return df_clean
         else:
             st.warning(f"Epitope file {file_path} not found. Immunogenic peptide scanning disabled.")
@@ -290,6 +357,7 @@ def load_immunogenic_peptides(file_path="epitope_table_export.xlsx"):
         st.error(f"Error loading epitope file {file_path}: {str(e)}")
         st.write(f"**Debug - Exception details:** {e}")
         return pd.DataFrame()
+
 
 def get_consistent_color_palette(n_colors, palette_type="optimization"):
     """Generate consistent color palettes for charts based on the active theme"""
@@ -3354,7 +3422,6 @@ def create_immunogenic_peptide_summary(findings_plus1, findings_minus1):
         finding_copy = finding.copy()
         finding_copy['frame'] = '-1 Frame'
         all_findings.append(finding_copy)
-        
     
     if not all_findings:
         return None
@@ -3652,7 +3719,10 @@ def main():
                         st.subheader("+1 Frame Analysis Results")
                         
                         # Load immunogenic peptides
-                        epitope_df = load_immunogenic_peptides()
+                        epitope_df = load_immunogenic_peptides(file_paths=[
+                                        os.path.join(os.path.dirname(__file__), "epitope_table_export.xlsx"),
+                                        os.path.join(os.path.dirname(__file__), "epitope_table_export_1752673251.xlsx")
+                                    ])
                         
                         # Create metrics display using full width
                         metric_col1, metric_col2, metric_col3, metric_col4, metric_col5, metric_col6 = st.columns(6)
@@ -4221,7 +4291,13 @@ def main():
                                         st.info("No sequences with +1 frame stops found for individual visualization.")
                                 
                                 # BATCH IMMUNOGENIC PEPTIDE SCANNING - NEW SECTION
-                                    epitope_df = load_immunogenic_peptides()
+                                    epitope_df = load_immunogenic_peptides(file_paths=[
+                                        os.path.join(os.path.dirname(__file__), "epitope_table_export.xlsx"),
+                                        os.path.join(os.path.dirname(__file__), "epitope_table_export_1752673251.xlsx")
+                                    ])
+                               
+                                
+                            
                                     
                                     if not epitope_df.empty:
                                         st.subheader("🔬 Batch Immunogenic Peptide Scanning")
@@ -5794,8 +5870,10 @@ def main():
                     summary_df = generate_detailed_mrna_summary(full_cds, final_mrna_sequence, JT_5_UTR, JT_3_UTR)
                     st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
-                    epitope_df = load_immunogenic_peptides()
-
+                    epitope_df = load_immunogenic_peptides(file_paths=[
+                                                            os.path.join(os.path.dirname(__file__), "epitope_table_export.xlsx"),
+                                                            os.path.join(os.path.dirname(__file__), "epitope_table_export_1752673251.xlsx")
+                                                        ])
                     if not epitope_df.empty:
                         st.subheader("🔬 Immunogenic Peptide Scanning (mRNA Design)")
                         
@@ -6242,8 +6320,10 @@ def main():
                         st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
                         # ADD IMMUNOGENIC PEPTIDE SCANNING HERE
-                        epitope_df = load_immunogenic_peptides()
-
+                        epitope_df = load_immunogenic_peptides(file_paths=[
+                                                                os.path.join(os.path.dirname(__file__), "epitope_table_export.xlsx"),
+                                                                os.path.join(os.path.dirname(__file__), "epitope_table_export_1752673251.xlsx")
+                                                            ])
                         if not epitope_df.empty:
                             st.subheader("🔬 Immunogenic Peptide Scanning (Cancer Vaccine)")
                             
@@ -6373,6 +6453,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
+    
     
     
     
