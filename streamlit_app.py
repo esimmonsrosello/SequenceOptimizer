@@ -1,8 +1,3 @@
-
-#Add mouse codon usage table
-#Make it so i can 3' tag vaccines with a peptide if/+1
-
-
 import streamlit as st
 import pandas as pd
 import numpy as np
