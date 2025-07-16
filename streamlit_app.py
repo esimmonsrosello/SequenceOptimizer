@@ -1,3 +1,4 @@
+
 #Add mouse codon usage table
 #Make it so i can 3' tag vaccines with a peptide if/+1
 
@@ -372,31 +373,11 @@ def create_geneious_like_visualization(utr5_seq, cds_seq, utr3_seq, signal_pepti
     # Generate a unique suffix based on key_suffix and a random value
     unique_id = f"{key_suffix}_{id(utr5_seq)}"
     
-    # Add controls for the visualization
-    st.markdown("### Visualization Controls")
+   
     
-    # Toggle button for full sequence view
-    toggle_key = f"show_full_sequence_{unique_id}"
-    if st.button("Toggle Full Sequence View", key=f"toggle_full_seq_{unique_id}"):
-        if toggle_key not in st.session_state:
-            st.session_state[toggle_key] = True
-        else:
-            st.session_state[toggle_key] = not st.session_state[toggle_key]
-    
-    # Show full sequence in a scrollable area if requested
-    if st.session_state.get(toggle_key, False):
-        st.subheader("Full mRNA Sequence (Scroll to View)")
-        full_sequence = utr5_seq + (signal_peptide_seq if signal_peptide_seq else "") + cds_seq + utr3_seq
-        st.text_area(
-            "Full mRNA Sequence",
-            full_sequence,
-            height=120,
-            key=f"full_mrna_sequence_{unique_id}",
-            help="Click in the text area and use Ctrl+A to select all, then Ctrl+C to copy"
-        )
     
     # Create the detailed visualization
-    st.markdown("### Sequence Visualization")
+    
     
     # Get theme colors
     theme_colors = THEMES[st.session_state.active_theme]["colors"]
@@ -1390,40 +1371,26 @@ def get_plus1_stop_positions(dna_seq):
     """Get positions of stop codons in +1 frame"""
     positions = []
     dna_seq_upper = dna_seq.upper().replace('U', 'T')
-    start_pos, end_pos = find_coding_sequence_bounds(dna_seq_upper)
-    if start_pos is None:
-        return positions
-     
     stop_codons_set = {"TAA", "TAG", "TGA"}
-    plus1_start = start_pos + 1
-    search_end = end_pos if end_pos is not None else len(dna_seq_upper) - 2
     
-    for i in range(plus1_start, search_end, 3):
-        if i+3 <= len(dna_seq_upper):
-            codon = dna_seq_upper[i:i+3]
-            if codon in stop_codons_set:
-                aa_position = ((i - start_pos) // 3) + 1
-                positions.append(aa_position)
+    for i in range(1, len(dna_seq_upper) - 2, 3):
+        codon = dna_seq_upper[i:i+3]
+        if codon in stop_codons_set:
+            aa_position = (i // 3) + 1
+            positions.append(aa_position)
     return positions
 
 def get_minus1_stop_positions(dna_seq):
     """Get positions of stop codons in -1 frame"""
     positions = []
     dna_seq_upper = dna_seq.upper().replace('U', 'T')
-    start_pos, end_pos = find_coding_sequence_bounds(dna_seq_upper)
-    if start_pos is None:
-        return positions
-     
     stop_codons_set = {"TAA", "TAG", "TGA"}
-    minus1_start = start_pos + 2
-    search_end = end_pos if end_pos is not None else len(dna_seq_upper) - 2
     
-    for i in range(minus1_start, search_end, 3):
-        if i+3 <= len(dna_seq_upper):
-            codon = dna_seq_upper[i:i+3]
-            if codon in stop_codons_set:
-                aa_position = ((i - start_pos) // 3) + 1
-                positions.append(aa_position)
+    for i in range(2, len(dna_seq_upper) - 2, 3):
+        codon = dna_seq_upper[i:i+3]
+        if codon in stop_codons_set:
+            aa_position = (i // 3) + 1
+            positions.append(aa_position)
     return positions
 
 def balanced_optimisation(dna_seq, bias_weight_input=None):
@@ -3255,11 +3222,13 @@ def run_single_optimization(sequence, method, bias_weight=None):
             }
         elif method == "In-Frame Analysis":  # Updated from "CAI Weight Analysis"
             weights, codons_list = get_codon_weights_row(clean_seq)
+            slippery_motifs = number_of_slippery_motifs(clean_seq)
             result = {
                 'Position': list(range(1, len(codons_list) + 1)),
                 'DNA_Codon': codons_list,
                 'CAI_Weight': weights,
                 'Amino_Acid': [st.session_state.genetic_code.get(c, '?') for c in codons_list],
+                'Slippery_Motifs': slippery_motifs,
                 'Method': method
             }
         elif method == "Balanced Optimization":
@@ -3413,6 +3382,23 @@ def main():
         
     st.title("Harmonized Optimization of Oligos and Frames")
     st.markdown("DNA sequence optimization and analysis")
+
+    with st.expander("Read Me"):
+        st.markdown('''
+        ### Optimization Algorithms
+        - **Standard Codon Optimization**: This method replaces each codon in your sequence with the most frequently used synonymous codon from the provided codon usage table. This is a straightforward way to potentially increase protein expression levels.
+        - **Balanced Optimization**: This algorithm considers both codon usage frequency and the introduction of +1 frameshift-inducing stop codons. It tries to find a balance between using high-frequency codons and strategically placing codons that can terminate out-of-frame translation, which can be beneficial for mRNA vaccine design. The "Bias Weight" slider in the sidebar allows you to control how strongly the algorithm favors introducing these +1 stop codons.
+        - **NC Stop Codon Optimisation**: This method specifically aims to introduce TAA or TAG stop codons in the +1 reading frame. It can perform double substitutions to create stop-stop motifs like TAATAA or TAGTAG.
+        - **JT Plus1 Stop Optimized**: This is a specialized algorithm that looks for specific three-amino-acid motifs (L/I/V, V/I, and any amino acid with A/G-starting codons) and attempts to substitute codons to create +1 frame stop codon motifs like TAATAA or TAGTAG.
+
+        ### Analysis
+        - **+1 Frame Analysis**: This analysis scans the sequence for stop codons in the +1 reading frame. It also includes a feature to scan for known immunogenic peptides in all three reading frames (+0, +1, -1). This is useful for identifying potential off-target immune responses from your translated sequence and its out-of-frame products. 
+        - **In-frame Analysis**: This option analyzes the input sequence in its primary reading frame (0). It calculates the Codon Adaptation Index (CAI) for each codon, which is a measure of how well the codon is adapted to the codon usage of a reference organism (in this case, humans by default). It also calculates the GC content of the sequence. This analysis is useful for assessing the baseline quality of your sequence before optimization.
+
+        ### Design Pages
+        - **mRNA Design**: This page allows you to design a full mRNA sequence by providing a CDS (Coding Sequence). You can add 5' and 3' UTRs (Untranslated Regions) and a signal peptide. The tool will then generate a complete mRNA sequence and provide a detailed analysis, including a visualization of the sequence, GC content, and a summary of important features.
+        - **Cancer Vaccine Design**: This page is a more specialized tool for designing cancer vaccines. It allows you to input a neoantigen sequence and will design a vaccine construct around it. This includes features for optimizing the expression of the neoantigen and adding other elements to enhance the immune response.
+        ''')
     
     # Sidebar for settings and configuration
     with st.sidebar:
@@ -3551,14 +3537,14 @@ def main():
             sequence_input = st.text_area(
                 "DNA Sequence",
                 height=150,
-                placeholder="Enter DNA sequence (A, T, G, C only)... or transfer from CDS Database Search",
+                placeholder="Enter DNA sequence (A, T, G, C only) - CODING SEQUENCE ONLY",
                 help="Paste your DNA sequence here. Spaces and newlines will be removed automatically. You can also transfer sequences from the CDS Database Search tab.",
                 key="sequence_input_area"
             )
         
         with col2:
             optimization_method = st.selectbox(
-    "Optimization Method",
+    "Choose Optimization Method",
     [
         "In-Frame Analysis",           # 1st
         "+1 Frame Analysis",           # 2nd
@@ -3630,7 +3616,7 @@ def main():
                             st.plotly_chart(fig, use_container_width=True)
                             
                             # Statistics including GC content
-                            col_stat1, col_stat2, col_stat3, col_stat4, col_stat5 = st.columns(5)
+                            col_stat1, col_stat2, col_stat3, col_stat4, col_stat5, col_stat6 = st.columns(6)
                             with col_stat1:
                                 st.metric("Average CAI", f"{np.mean(cai_weights):.3f}")
                             with col_stat2:
@@ -3644,6 +3630,9 @@ def main():
                                 # Calculate GC content from the original sequence
                                 gc_content = calculate_gc_content(sequence_input)
                                 st.metric("GC Content", f"{gc_content:.1f}%")
+                            with col_stat6:
+                                slippery_motifs = number_of_slippery_motifs(sequence_input)
+                                st.metric("Slippery Motifs", slippery_motifs)
                             
                             # Interactive data table
                             st.subheader("📋 Detailed Results")
@@ -3678,6 +3667,78 @@ def main():
                             st.metric("Slippery Motifs", result['Slippery_Motifs'])
                         with metric_col6:
                             st.metric("Total -1 Stops", result['minus1_Total_Stops'])
+
+                       
+
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            # +1 Stop codon distribution pie chart
+                            if result['Plus1_Total_Stops'] > 0:
+                                st.markdown("#### 🥧 +1 Frame Stop Codons")
+                                pie_data_plus1 = []
+                                pie_labels_plus1 = []
+                                if result['Plus1_TAA_Count'] > 0:
+                                    pie_data_plus1.append(result['Plus1_TAA_Count'])
+                                    pie_labels_plus1.append('TAA')
+                                if result['Plus1_TAG_Count'] > 0:
+                                    pie_data_plus1.append(result['Plus1_TAG_Count'])
+                                    pie_labels_plus1.append('TAG')
+                                if result['Plus1_TGA_Count'] > 0:
+                                    pie_data_plus1.append(result['Plus1_TGA_Count'])
+                                    pie_labels_plus1.append('TGA')
+                                
+                                fig_pie_plus1 = create_interactive_pie_chart(pie_data_plus1, pie_labels_plus1, "+1 Frame Stop Codon Distribution")
+                                st.plotly_chart(fig_pie_plus1, use_container_width=True, key="single_plus1_pie_chart")
+                            else:
+                                st.info("No +1 frame stop codons found.")
+
+                        with col2:
+                            # -1 Stop codon distribution pie chart
+                            if result['minus1_Total_Stops'] > 0:
+                                st.markdown("#### 🥧 -1 Frame Stop Codons")
+                                pie_data_minus1 = []
+                                pie_labels_minus1 = []
+                                if result['minus1_TAA_Count'] > 0:
+                                    pie_data_minus1.append(result['minus1_TAA_Count'])
+                                    pie_labels_minus1.append('TAA')
+                                if result['minus1_TAG_Count'] > 0:
+                                    pie_data_minus1.append(result['minus1_TAG_Count'])
+                                    pie_labels_minus1.append('TAG')
+                                if result['minus1_TGA_Count'] > 0:
+                                    pie_data_minus1.append(result['minus1_TGA_Count'])
+                                    pie_labels_minus1.append('TGA')
+                                
+                                fig_pie_minus1 = create_interactive_pie_chart(pie_data_minus1, pie_labels_minus1, "-1 Frame Stop Codon Distribution")
+                                st.plotly_chart(fig_pie_minus1, use_container_width=True, key="single_minus1_pie_chart")
+                            else:
+                                st.info("No -1 frame stop codons found.")
+                        
+                        with st.expander("View Summary Details"):
+                            # +1 Stops
+                            st.markdown("##### +1 Frame Stops")
+                            plus1_data = {
+                                'Codon': ['TAA', 'TAG', 'TGA', '**Total**'],
+                                'Count': [result.get('Plus1_TAA_Count', 0), result.get('Plus1_TAG_Count', 0), result.get('Plus1_TGA_Count', 0), result.get('Plus1_Total_Stops', 0)]
+                            }
+                            plus1_df = pd.DataFrame(plus1_data)
+                            st.dataframe(plus1_df, use_container_width=True)
+
+                            # -1 Stops
+                            st.markdown("##### -1 Frame Stops")
+                            minus1_data = {
+                                'Codon': ['TAA', 'TAG', 'TGA', '**Total**'],
+                                'Count': [result.get('minus1_TAA_Count', 0), result.get('minus1_TAG_Count', 0), result.get('minus1_TGA_Count', 0), result.get('minus1_Total_Stops', 0)]
+                            }
+                            minus1_df = pd.DataFrame(minus1_data)
+                            st.dataframe(minus1_df, use_container_width=True)
+
+                            # Slippery Motifs
+                            st.markdown("##### Slippery Motifs")
+                            st.metric(label="Total Count", value=result.get('Slippery_Motifs', 0))
+
+                        st.divider()
+                        
                         
                         # IMMUNOGENIC PEPTIDE SCANNING - NEW SECTION
                         if not epitope_df.empty:
@@ -3740,166 +3801,12 @@ def main():
                         else:
                             st.info("ℹ️ Immunogenic peptide scanning disabled - epitope_table_export.xlsx not found")
                         
-                        # ... rest of your existing +1 Frame Analysis code continues here ...
                         
-                        # Visualization of +1 frame stop codons
-                        if result['Plus1_Total_Stops'] > 0:
-                            st.subheader("Stop Codon Distribution (+1 Frame)")
-                            
-                            # Create chart layout
-                            chart_col, table_col = st.columns([2, 1])
-                            
-                            with chart_col:
-                                stop_data = {
-                                    'Codon': ['TAA', 'TAG', 'TGA'],
-                                    'Count': [result['Plus1_TAA_Count'], result['Plus1_TAG_Count'], result['Plus1_TGA_Count']]
-                                }
-                                stop_df = pd.DataFrame(stop_data)
-                                stop_df = stop_df[stop_df['Count'] > 0]  # Only show non-zero counts
-                                
-                                if not stop_df.empty:
-                                    # Create a pie chart with different colors
-                                    fig, ax = plt.subplots(figsize=(8, 8))
-                                    colors = ['#FF6B6B', '#4ECDC4', '#45B7D1'][:len(stop_df)]  # Different colors
-                                    
-                                    wedges, texts, autotexts = ax.pie(
-                                        stop_df['Count'], 
-                                        labels=stop_df['Codon'], 
-                                        colors=colors, 
-                                        autopct='%1.1f%%', 
-                                        startangle=90,
-                                        textprops={'fontsize': 12, 'fontweight': 'bold'},
-                                        wedgeprops={'edgecolor': 'white', 'linewidth': 2}
-                                    )
-                                    
-                                    # Enhance text appearance
-                                    for autotext in autotexts:
-                                        autotext.set_color('white')
-                                        autotext.set_fontweight('bold')
-                                        autotext.set_fontsize(11)
-                                    
-                                    ax.set_title('Stop Codon Distribution in +1 Frame', fontsize=14, fontweight='bold', pad=20)
-                                    
-                                    plt.tight_layout()
-                                    st.pyplot(fig)
-                                    plt.close()
-                            
-                            with table_col:
-                                st.markdown("**📊 Stop Codon Summary:**")
-                                
-                                # Calculate stops per 100bp
-                                sequence_length = result.get('Sequence_Length', 1)
-                                stops_per_100bp = (result['Plus1_Total_Stops'] / sequence_length) * 100
-                                
-                                stop_summary = pd.DataFrame({
-                                    'Metric': ['TAA Count', 'TAG Count', 'TGA Count', 'Total Stops', 'Stops per 100bp'],
-                                    'Value': [
-                                        result['Plus1_TAA_Count'], 
-                                        result['Plus1_TAG_Count'], 
-                                        result['Plus1_TGA_Count'], 
-                                        result['Plus1_Total_Stops'],
-                                        f"{stops_per_100bp:.2f}"
-                                    ]
-                                })
-                                st.dataframe(stop_summary, use_container_width=True, hide_index=True)
-                            
-                            # Summary table
-                            sequence_length = result.get('Sequence_Length', 1)
-                            stops_per_100bp = (result['Plus1_Total_Stops'] / sequence_length) * 100
-                            
-                            stop_summary = pd.DataFrame({
-                                'Metric': ['TAA Count', 'TAG Count', 'TGA Count', 'Total Stops', 'Stops per 100bp'],
-                                'Value': [
-                                    result['Plus1_TAA_Count'], 
-                                    result['Plus1_TAG_Count'], 
-                                    result['Plus1_TGA_Count'], 
-                                    result['Plus1_Total_Stops'],
-                                    f"{stops_per_100bp:.2f}"
-                                ]
-                            })
-                            st.dataframe(stop_summary, use_container_width=True, hide_index=True)
-                            
-                        # Visualization of -1 frame stop codons
-                        if result['minus1_Total_Stops'] > 0:
-                            st.subheader("Stop Codon Distribution (-1 Frame)")
-                            
-                            # Create chart layout
-                            chart_col, table_col = st.columns([2, 1])
-                            
-                            with chart_col:
-                                stop_data = {
-                                    'Codon': ['TAA', 'TAG', 'TGA'],
-                                    'Count': [result['minus1_TAA_Count'], result['minus1_TAG_Count'], result['minus1_TGA_Count']]
-                                }
-                                stop_df = pd.DataFrame(stop_data)
-                                stop_df = stop_df[stop_df['Count'] > 0]  # Only show non-zero counts
-                                
-                                if not stop_df.empty:
-                                    # Create a pie chart with different colors
-                                    fig, ax = plt.subplots(figsize=(8, 8))
-                                    colors = ['#FF6B6B', '#4ECDC4', '#45B7D1'][:len(stop_df)]  # Different colors
-                                    
-                                    wedges, texts, autotexts = ax.pie(
-                                        stop_df['Count'], 
-                                        labels=stop_df['Codon'], 
-                                        colors=colors, 
-                                        autopct='%1.1f%%', 
-                                        startangle=90,
-                                        textprops={'fontsize': 12, 'fontweight': 'bold'},
-                                        wedgeprops={'edgecolor': 'white', 'linewidth': 2}
-                                    )
-                                    
-                                    # Enhance text appearance
-                                    for autotext in autotexts:
-                                        autotext.set_color('white')
-                                        autotext.set_fontweight('bold')
-                                        autotext.set_fontsize(11)
-                                    
-                                    ax.set_title('Stop Codon Distribution in -1 Frame', fontsize=14, fontweight='bold', pad=20)
-                                    
-                                    plt.tight_layout()
-                                    st.pyplot(fig)
-                                    plt.close()
-                            
-                            with table_col:
-                                st.markdown("**📊 Stop Codon Summary:**")
-                                
-                                # Calculate stops per 100bp
-                                sequence_length = result.get('Sequence_Length', 1)
-                                stops_per_100bp = (result['minus1_Total_Stops'] / sequence_length) * 100
-                                
-                                stop_summary = pd.DataFrame({
-                                    'Metric': ['TAA Count', 'TAG Count', 'TGA Count', 'Total Stops', 'Stops per 100bp'],
-                                    'Value': [
-                                        result['minus1_TAA_Count'], 
-                                        result['minus1_TAG_Count'], 
-                                        result['minus1_TGA_Count'], 
-                                        result['minus1_Total_Stops'],
-                                        f"{stops_per_100bp:.2f}"
-                                    ]
-                                })
-                                st.dataframe(stop_summary, use_container_width=True, hide_index=True)
-                            
-                            # Summary table
-                            sequence_length = result.get('Sequence_Length', 1)
-                            stops_per_100bp = (result['minus1_Total_Stops'] / sequence_length) * 100
-                            
-                            stop_summary = pd.DataFrame({
-                                'Metric': ['TAA Count', 'TAG Count', 'TGA Count', 'Total Stops', 'Stops per 100bp'],
-                                'Value': [
-                                    result['minus1_TAA_Count'], 
-                                    result['minus1_TAG_Count'], 
-                                    result['minus1_TGA_Count'], 
-                                    result['minus1_Total_Stops'],
-                                    f"{stops_per_100bp:.2f}"
-                                ]
-                            })
-                            st.dataframe(stop_summary, use_container_width=True, hide_index=True)
-
-                        # Add the new graphs
-                        st.subheader("CAI and Stop Codon Analysis")
 
                         # Get CAI data
+                        st.divider()
+                        st.subheader("Location of Out-of-Frame Stop Codons")
+                        
                         cai_result, cai_error = run_single_optimization(sequence_input, "In-Frame Analysis")
                         if not cai_error and cai_result:
                             cai_df = pd.DataFrame(cai_result)
@@ -4168,7 +4075,7 @@ def main():
                                         st.plotly_chart(fig, use_container_width=True)
                                         
                                         # Statistics including GC content
-                                        col_stat1, col_stat2, col_stat3, col_stat4, col_stat5 = st.columns(5)
+                                        col_stat1, col_stat2, col_stat3, col_stat4, col_stat5, col_stat6 = st.columns(6)
                                         with col_stat1:
                                             st.metric("Average CAI", f"{np.mean(cai_weights):.3f}")
                                         with col_stat2:
@@ -4182,6 +4089,9 @@ def main():
                                             # Calculate GC content for this sequence
                                             gc_content = calculate_gc_content(seq_sequence)
                                             st.metric("GC Content", f"{gc_content:.1f}%")
+                                        with col_stat6:
+                                            slippery_motifs = number_of_slippery_motifs(seq_sequence)
+                                            st.metric("Slippery Motifs", slippery_motifs)
                                         
                                         # Data table in expandable section
                                         with st.expander(f"📋 View detailed In-Frame data for {seq_name}"):
@@ -4211,28 +4121,27 @@ def main():
                                 
                                 # Summary statistics
                                 st.markdown("#### 📈 Overall Statistics")
-                                if gc_available:
-                                    avg_gc = batch_df['GC_Content'].mean()
-                                    col_stat1, col_stat2, col_stat3, col_stat4, col_stat5 = st.columns(5)
-                                    with col_stat2:
-                                        st.metric("Avg GC Content", f"{avg_gc:.1f}%")
-                                else:
-                                    col_stat1, col_stat3, col_stat4, col_stat5 = st.columns(4)
-                                
-                                with col_stat1:
+                                avg_gc = batch_df['GC_Content'].mean()
+                                avg_len = batch_df['Sequence_Length'].mean()
+                                avg_prot_len = batch_df['Protein_Length'].mean()
+                                total_plus1_stops = batch_df['Plus1_Total_Stops'].sum()
+                                total_minus1_stops = batch_df['minus1_Total_Stops'].sum()
+                                total_slippery = batch_df['Slippery_Motifs'].sum()
+
+                                col1, col2, col3, col4 = st.columns(4)
+                                with col1:
                                     st.metric("Total Sequences", len(sequences))
-                                with col_stat3:
-                                    st.metric("Total +1 Stops", total_stops)
-                                with col_stat4:
-                                    avg_stops = total_stops / len(sequences) if len(sequences) > 0 else 0
-                                    st.metric("Avg Stops/Seq", f"{avg_stops:.1f}")
-                                with col_stat5:
-                                    sequences_with_stops = len(batch_df[batch_df['Plus1_Total_Stops'] > 0])
-                                    st.metric("Seqs with Stops", f"{sequences_with_stops}/{len(sequences)}")
-                                
-                                
-                                    sequences_with_stops = len(batch_df[batch_df['Plus1_Total_Stops'] > 0])
-                                    st.metric("Seqs with Stops", f"{sequences_with_stops}/{len(sequences)}")
+                                    
+                                with col2:
+                                    
+                                    st.metric("Total +1 Stops", total_plus1_stops)
+                                    
+                                with col3:
+                                    
+                                    st.metric("Total -1 Stops", total_minus1_stops)
+                                    
+                                with col4: 
+                                    st.metric("Total Slippery Motifs", total_slippery)
                                 
                                 
                                 # Individual sequence pie charts
@@ -5884,7 +5793,6 @@ def main():
                     summary_df = generate_detailed_mrna_summary(full_cds, final_mrna_sequence, JT_5_UTR, JT_3_UTR)
                     st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
-                    # ADD IMMUNOGENIC PEPTIDE SCANNING HERE
                     epitope_df = load_immunogenic_peptides()
 
                     if not epitope_df.empty:
@@ -6083,8 +5991,9 @@ def main():
             # Format linker options for display
             linker_names = list(LINKER_OPTIONS.keys())
             
+            st.markdown("##### Inter-Peptide Linker")
             selected_linker_name = st.selectbox(
-                "Select Linker:",
+                "Select Linker between peptides:",
                 linker_names,
                 key="cancer_vaccine_linker_selection"
             )
@@ -6094,7 +6003,37 @@ def main():
             
             linker_repeats = 1
             if selected_linker_name in ["(G₄S)n linker", "EAAAK linker", "(XP)n linker"]:
-                linker_repeats = st.slider("Number of linker repeats:", 1, 5, 1, key="cancer_linker_repeats")
+                linker_repeats = st.slider("Number of inter-peptide linker repeats:", 1, 5, 1, key="cancer_linker_repeats")
+
+            st.markdown("##### Pre-Peptide Linker (after Signal Peptide, before first peptide)")
+            selected_pre_linker_name = st.selectbox(
+                "Select Pre-Peptide Linker:",
+                ["None"] + linker_names,
+                key="cancer_vaccine_pre_linker_selection"
+            )
+            pre_linker_info = LINKER_OPTIONS.get(selected_pre_linker_name, {"sequence_aa": "", "type": "N/A", "purpose": "N/A"})
+            if selected_pre_linker_name != "None":
+                st.info(f"**Type:** {pre_linker_info['type']}\n\n**Purpose:** {pre_linker_info['purpose']}\n\n**Amino Acid Sequence:** {pre_linker_info['sequence_aa']}")
+                pre_linker_repeats = 1
+                if selected_pre_linker_name in ["(G₄S)n linker", "EAAAK linker", "(XP)n linker"]:
+                    pre_linker_repeats = st.slider("Number of pre-peptide linker repeats:", 1, 5, 1, key="cancer_pre_linker_repeats")
+            else:
+                pre_linker_repeats = 0 # No repeats if no linker selected
+
+            st.markdown("##### Post-Peptide Linker (after last peptide/MITD, before Stop Codon)")
+            selected_post_linker_name = st.selectbox(
+                "Select Post-Peptide Linker:",
+                ["None"] + linker_names,
+                key="cancer_vaccine_post_linker_selection"
+            )
+            post_linker_info = LINKER_OPTIONS.get(selected_post_linker_name, {"sequence_aa": "", "type": "N/A", "purpose": "N/A"})
+            if selected_post_linker_name != "None":
+                st.info(f"**Type:** {post_linker_info['type']}\n\n**Purpose:** {post_linker_info['purpose']}\n\n**Amino Acid Sequence:** {post_linker_info['sequence_aa']}")
+                post_linker_repeats = 1
+                if selected_post_linker_name in ["(G₄S)n linker", "EAAAK linker", "(XP)n linker"]:
+                    post_linker_repeats = st.slider("Number of post-peptide linker repeats:", 1, 5, 1, key="cancer_post_linker_repeats")
+            else:
+                post_linker_repeats = 0 # No repeats if no linker selected
             
             # Step 4: Signal Peptide Selection
             st.markdown("#### Signal Peptide Selection")
@@ -6152,7 +6091,11 @@ def main():
                         # 1. Start with signal peptide
                         full_aa_sequence = selected_sp_info['sequence_aa']
                         
-                        # 2. Add peptides with linkers
+                        # 2. Add pre-peptide linker if selected
+                        if selected_pre_linker_name != "None":
+                            full_aa_sequence += pre_linker_info['sequence_aa'] * pre_linker_repeats
+
+                        # 3. Add peptides with inter-peptide linkers
                         linker_aa_sequence = selected_linker_info['sequence_aa'] * linker_repeats
                         
                         for i, peptide in enumerate(peptide_sequences):
@@ -6162,14 +6105,18 @@ def main():
                             # Add peptide
                             full_aa_sequence += clean_peptide
                             
-                            # Add linker after all peptides except the last one
+                            # Add inter-peptide linker after all peptides except the last one
                             if i < len(peptide_sequences) - 1:
                                 full_aa_sequence += linker_aa_sequence
                         
-                        # 3. Add MITD if selected
+                        # 4. Add MITD if selected
                         if add_mitd:
                             mitd_aa_sequence = "STQALNTVYTKLNIRLRQGRTLYTILNLA"
                             full_aa_sequence += mitd_aa_sequence
+
+                        # 5. Add post-peptide linker if selected
+                        if selected_post_linker_name != "None":
+                            full_aa_sequence += post_linker_info['sequence_aa'] * post_linker_repeats
                         
                         # Reverse translate to nucleotide sequence
                         full_cds = reverse_translate_highest_cai(full_aa_sequence)
@@ -6238,6 +6185,13 @@ def main():
                             "Length (bp)": [len(JT_5_UTR), len(signal_peptide_dna)]
                         }
                         
+                        # Add pre-peptide linker if selected
+                        if selected_pre_linker_name != "None":
+                            components_data["Component"].append("Pre-Peptide Linker")
+                            components_data["Type"].append(pre_linker_info['type'])
+                            components_data["Length (aa)"].append(len(pre_linker_info['sequence_aa']) * pre_linker_repeats)
+                            components_data["Length (bp)"].append(len(pre_linker_info['sequence_aa']) * pre_linker_repeats * 3)
+
                         # Add peptides and linkers
                         for i, peptide in enumerate(peptide_sequences):
                             clean_peptide = peptide.strip().upper()
@@ -6258,6 +6212,13 @@ def main():
                             components_data["Type"].append("Transport Domain")
                             components_data["Length (aa)"].append(30)  # Length of MITD
                             components_data["Length (bp)"].append(90)  # 30 aa * 3 bp/aa
+
+                        # Add post-peptide linker if selected
+                        if selected_post_linker_name != "None":
+                            components_data["Component"].append("Post-Peptide Linker")
+                            components_data["Type"].append(post_linker_info['type'])
+                            components_data["Length (aa)"].append(len(post_linker_info['sequence_aa']) * post_linker_repeats)
+                            components_data["Length (bp)"].append(len(post_linker_info['sequence_aa']) * post_linker_repeats * 3)
                         
                         # Add 3' UTR
                         components_data["Component"].append("3' UTR")
@@ -6411,5 +6372,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
+    
     
     
