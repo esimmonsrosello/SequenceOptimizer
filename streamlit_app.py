@@ -29,7 +29,7 @@ from datetime import datetime
 
 # Configure page
 st.set_page_config(
-    page_title="🐎 Harmonized Optimization of Oligos and Frames",
+    page_title="Harmonized Optimization of Oligos and Frames",
     page_icon=":horse:",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -276,7 +276,7 @@ def load_immunogenic_peptides(file_path="epitope_table_export.xlsx"):
             # Store the column name for later use
             df_clean.attrs['epitope_column'] = name_column
             
-            st.success(f"Loaded {len(df_clean)} immunogenic peptides from column '{name_column}'")
+            
             
            
             
@@ -3686,7 +3686,7 @@ def main():
                 if error:
                     st.error(f"Error: {error}")
                 else:
-                    st.success("Optimization completed successfully")
+                    st.success("Optimization completed successfully - Scroll down to see some magical results!")
                     
                     # Full-width results section
                     st.divider()
@@ -3784,13 +3784,13 @@ def main():
                                 st.markdown("#### 🥧 +1 Frame Stop Codons")
                                 pie_data_plus1 = []
                                 pie_labels_plus1 = []
-                                if result['Plus1_TAA_Count'] > 0:
+                                if 'Plus1_TAA_Count' in result and result['Plus1_TAA_Count'] > 0:
                                     pie_data_plus1.append(result['Plus1_TAA_Count'])
                                     pie_labels_plus1.append('TAA')
-                                if result['Plus1_TAG_Count'] > 0:
+                                if 'Plus1_TAG_Count' in result and result['Plus1_TAG_Count'] > 0:
                                     pie_data_plus1.append(result['Plus1_TAG_Count'])
                                     pie_labels_plus1.append('TAG')
-                                if result['Plus1_TGA_Count'] > 0:
+                                if 'Plus1_TGA_Count' in result and result['Plus1_TGA_Count'] > 0:
                                     pie_data_plus1.append(result['Plus1_TGA_Count'])
                                     pie_labels_plus1.append('TGA')
 
@@ -3845,49 +3845,52 @@ def main():
 
                         st.divider()
                         # Add the new graphs for single sequence analysis (matching batch analysis)
+                        
                         st.subheader("📊 Interactive CAI and Stop Codon Analysis")
 
-                        # Get CAI data
-                        cai_result, cai_error = run_single_optimization(sequence_input, "In-Frame Analysis")
-                        if not cai_error and isinstance(cai_result, dict) and 'Position' in cai_result:
-                            cai_df = pd.DataFrame(cai_result)
-                            positions = cai_df['Position'].tolist()
-                            cai_weights = cai_df['CAI_Weight'].tolist()
-                            amino_acids = cai_df['Amino_Acid'].tolist()
+                        with st.expander("🧬 Interactive CAI and Stop Codon Charts", expanded=False):
+                            
+                            cai_result, cai_error = run_single_optimization(sequence_input, "In-Frame Analysis")
+                            if not cai_error and isinstance(cai_result, dict) and 'Position' in cai_result:
+                                cai_df = pd.DataFrame(cai_result)
+                                positions = cai_df['Position'].tolist()
+                                cai_weights = cai_df['CAI_Weight'].tolist()
+                                amino_acids = cai_df['Amino_Acid'].tolist()
 
-                            # Get stop codon positions
-                            plus1_stop_positions = get_plus1_stop_positions(sequence_input)
-                            minus1_stop_positions = get_minus1_stop_positions(sequence_input)
+                                # Get stop codon positions
+                                plus1_stop_positions = get_plus1_stop_positions(sequence_input)
+                                minus1_stop_positions = get_minus1_stop_positions(sequence_input)
 
-                            # Create +1 stop codon plot
-                            if plus1_stop_positions:
-                                fig_plus1 = create_interactive_cai_stop_codon_plot(
-                                    positions,
-                                    cai_weights,
-                                    amino_acids,
-                                    plus1_stop_positions,
-                                    f"Sequence ({len(sequence_input)} bp)",
-                                    "+1 Frame"
-                                )
-                                st.plotly_chart(fig_plus1, use_container_width=True, key="single_plus1_cai_stop_plot")
+                                # Create +1 stop codon plot
+                                if plus1_stop_positions:
+                                    fig_plus1 = create_interactive_cai_stop_codon_plot(
+                                        positions,
+                                        cai_weights,
+                                        amino_acids,
+                                        plus1_stop_positions,
+                                        f"Sequence ({len(sequence_input)} bp)",
+                                        "+1 Frame"
+                                    )
+                                    st.plotly_chart(fig_plus1, use_container_width=True, key="single_plus1_cai_stop_plot")
+                                else:
+                                    st.info("No +1 stop codons found to plot against CAI.")
+
+                                # Create -1 stop codon plot
+                                if minus1_stop_positions:
+                                    fig_minus1 = create_interactive_cai_stop_codon_plot(
+                                        positions,
+                                        cai_weights,
+                                        amino_acids,
+                                        minus1_stop_positions,
+                                        f"Sequence ({len(sequence_input)} bp)",
+                                        "-1 Frame"
+                                    )
+                                    st.plotly_chart(fig_minus1, use_container_width=True, key="single_minus1_cai_stop_plot")
+                                else:
+                                    st.info("No -1 stop codons found to plot against CAI.")
                             else:
-                                st.info("No +1 stop codons found to plot against CAI.")
+                                st.warning("Could not generate CAI data for stop codon plots.")
 
-                            # Create -1 stop codon plot
-                            if minus1_stop_positions:
-                                fig_minus1 = create_interactive_cai_stop_codon_plot(
-                                    positions,
-                                    cai_weights,
-                                    amino_acids,
-                                    minus1_stop_positions,
-                                    f"Sequence ({len(sequence_input)} bp)",
-                                    "-1 Frame"
-                                )
-                                st.plotly_chart(fig_minus1, use_container_width=True, key="single_minus1_cai_stop_plot")
-                            else:
-                                st.info("No -1 stop codons found to plot against CAI.")
-                        else:
-                            st.warning("Could not generate CAI data for stop codon plots.")
 
                         st.divider()
                         
@@ -3959,6 +3962,9 @@ def main():
                         # Show sequence comparison for optimization methods using full width
                         if 'Optimized_DNA' in result:
                             st.subheader("Sequence Comparison")
+                            
+                            
+                            
                             seq_col1, seq_col2 = st.columns(2)
                             
                             with seq_col1:
@@ -3966,15 +3972,7 @@ def main():
                             with seq_col2:
                                 display_copyable_sequence(result['Optimized_DNA'], "Optimized Sequence", "opt")
                             
-                            # Results summary table
-                            st.subheader("Results Summary")
-                            result_data = []
-                            for key, value in result.items():
-                                if key != 'Method' and key not in ['Original_DNA', 'Optimized_DNA']:
-                                    result_data.append({'Field': key.replace('_', ' ').title(), 'Value': str(value)})
                             
-                            result_df = pd.DataFrame(result_data)
-                            st.dataframe(result_df, use_container_width=True)
                         else:
                             # For methods without optimization (like pure analysis)
                             result_data = []
@@ -3984,6 +3982,117 @@ def main():
                             
                             result_df = pd.DataFrame(result_data)
                             st.dataframe(result_df, use_container_width=True)
+                            
+                         # Use optimized sequence if available, otherwise fallback to original
+                        optimized_seq = result['Optimized_DNA'] if 'Optimized_DNA' in result else sequence_input
+
+                        # +1 Frame Stop Codon Distribution
+                        with st.expander("🥧 +1 Frame Stop Codon Distribution", expanded=False):
+                            pie_data_plus1 = []
+                            pie_labels_plus1 = []
+                            plus1_stops = number_of_plus1_stops(optimized_seq)
+                            for codon in ['TAA', 'TAG', 'TGA']:
+                                count = plus1_stops[codon]
+                                if count > 0:
+                                    pie_data_plus1.append(count)
+                                    pie_labels_plus1.append(codon)
+                            if pie_data_plus1:
+                                fig_pie_plus1 = create_interactive_pie_chart(pie_data_plus1, pie_labels_plus1, "+1 Frame Stop Codon Distribution", show_percentages=False)
+                                st.plotly_chart(fig_pie_plus1, use_container_width=True, key="single_plus1_pie_chart")
+                            else:
+                                st.info("No +1 frame stop codons found or data not available for this method.")
+
+                        # -1 Frame Stop Codon Distribution
+                        with st.expander("🥧 -1 Frame Stop Codon Distribution", expanded=False):
+                            pie_data_minus1 = []
+                            pie_labels_minus1 = []
+                            minus1_stops = number_of_minus1_stops(optimized_seq)
+                            for codon in ['TAA', 'TAG', 'TGA']:
+                                count = minus1_stops[codon]
+                                if count > 0:
+                                    pie_data_minus1.append(count)
+                                    pie_labels_minus1.append(codon)
+                            if pie_data_minus1:
+                                fig_pie_minus1 = create_interactive_pie_chart(pie_data_minus1, pie_labels_minus1, "-1 Frame Stop Codon Distribution", show_percentages=False)
+                                st.plotly_chart(fig_pie_minus1, use_container_width=True, key="single_minus1_pie_chart")
+                            else:
+                                st.info("No -1 frame stop codons found or data not available for this method.")
+
+                        # Stops and Slippery Motifs per 100bp
+                        with st.expander("📊 Stops and Slippery Motifs per 100bp", expanded=False):
+                            sequence_length = len(optimized_seq)
+                            plus1_stops = number_of_plus1_stops(optimized_seq)
+                            stops_per_100bp = {
+                                'TAA': [(plus1_stops['TAA'] / sequence_length) * 100 if sequence_length > 0 else 0],
+                                'TAG': [(plus1_stops['TAG'] / sequence_length) * 100 if sequence_length > 0 else 0],
+                                'TGA': [(plus1_stops['TGA'] / sequence_length) * 100 if sequence_length > 0 else 0],
+                            }
+                            stops_fig = create_interactive_stacked_bar_chart(
+                                ['Optimized Sequence'],
+                                stops_per_100bp,
+                                '+1 Frame Stops per 100bp by Type',
+                                '+1 Frame Stops per 100bp'
+                            )
+                            st.plotly_chart(stops_fig, use_container_width=True, key="single_stops_per_100bp_opt")
+
+                            slippery_breakdown = count_specific_slippery_motifs(optimized_seq)
+                            slippery_per_100bp = {
+                                'TTTT': [(slippery_breakdown['TTTT'] / sequence_length) * 100 if sequence_length > 0 else 0],
+                                'TTTC': [(slippery_breakdown['TTTC'] / sequence_length) * 100 if sequence_length > 0 else 0],
+                            }
+                            slippery_fig = create_interactive_stacked_bar_chart(
+                                ['Optimized Sequence'],
+                                slippery_per_100bp,
+                                'Slippery Sites per 100bp by Type',
+                                'Slippery Sites per 100bp'
+                            )
+                            st.plotly_chart(slippery_fig, use_container_width=True, key="single_slippery_per_100bp_opt")
+
+                            
+
+                            # CAI and stop codon analysis charts
+                            st.subheader("📊 Interactive CAI and Stop Codon Analysis")
+                        with st.expander("🧬 Interactive CAI and Stop Codon Charts", expanded=False):
+                            cai_result, cai_error = run_single_optimization(optimized_seq, "In-Frame Analysis")
+                            if not cai_error and isinstance(cai_result, dict) and 'Position' in cai_result:
+                                cai_df = pd.DataFrame(cai_result)
+                                positions = cai_df['Position'].tolist()
+                                cai_weights = cai_df['CAI_Weight'].tolist()
+                                amino_acids = cai_df['Amino_Acid'].tolist()
+
+                                plus1_stop_positions = get_plus1_stop_positions(optimized_seq)
+                                minus1_stop_positions = get_minus1_stop_positions(optimized_seq)
+                                slippery_positions = get_slippery_motif_positions(optimized_seq)
+
+                                if plus1_stop_positions:
+                                    fig_plus1 = create_interactive_cai_stop_codon_plot(
+                                        positions, cai_weights, amino_acids, plus1_stop_positions,
+                                        f"Optimized Sequence ({len(optimized_seq)} bp)", "+1 Frame"
+                                    )
+                                    st.plotly_chart(fig_plus1, use_container_width=True, key="single_plus1_cai_stop_plot_opt")
+                                else:
+                                    st.info("No +1 stop codons found to plot against CAI.")
+
+                                if minus1_stop_positions:
+                                    fig_minus1 = create_interactive_cai_stop_codon_plot(
+                                        positions, cai_weights, amino_acids, minus1_stop_positions,
+                                        f"Optimized Sequence ({len(optimized_seq)} bp)", "-1 Frame"
+                                    )
+                                    st.plotly_chart(fig_minus1, use_container_width=True, key="single_minus1_cai_stop_plot_opt")
+                                else:
+                                    st.info("No -1 stop codons found to plot against CAI.")
+
+                                if slippery_positions:
+                                    fig_slippery = create_interactive_cai_slippery_plot(
+                                        positions, cai_weights, amino_acids, slippery_positions,
+                                        f"Optimized Sequence ({len(optimized_seq)} bp)"
+                                    )
+                                    st.plotly_chart(fig_slippery, use_container_width=True, key="single_slippery_cai_plot_opt")
+                                else:
+                                    st.info("No slippery motifs found to plot against CAI.")
+                            else:
+                                st.warning("Could not generate CAI data for stop codon/slippery motif plots.")
+
                     
                     # Accumulation option
                     if accumulate_results:
@@ -4099,7 +4208,7 @@ def main():
                             result_with_name['Sequence_Name'] = name
                             results.append(result_with_name)
                     
-                    status_text.text("Batch processing completed!")
+                    status_text.text("I'M DONE! Processing complete.")
                     
                     if results:
                         # Convert to DataFrame
@@ -4434,22 +4543,7 @@ def main():
                                                 
                                                 st.dataframe(epitope_pivot, use_container_width=True)
                                                 
-                                                # Interactive chart showing epitope distribution
-                                                if len(epitope_pivot) > 0:
-                                                    st.subheader("📊 Interactive Epitope Distribution")
-                                                    
-                                                    epitope_chart_data = {
-                                                        '+1 Frame': epitope_pivot['+1 Frame'].tolist(),
-                                                        '-1 Frame': epitope_pivot['-1 Frame'].tolist()
-                                                    }
-                                                    
-                                                    epitope_fig = create_interactive_stacked_bar_chart(
-                                                        epitope_pivot.index.tolist(),
-                                                        epitope_chart_data,
-                                                        'Immunogenic Peptides Found by Sequence',
-                                                        'Number of Epitopes'
-                                                    )
-                                                    st.plotly_chart(epitope_fig, use_container_width=True)
+                                                
                                                 
                                                 # Download batch epitope findings
                                                 excel_data = create_download_link(batch_epitope_df, f"Batch_Immunogenic_Peptides_{total_epitopes_found}_epitopes.xlsx")
@@ -4672,8 +4766,8 @@ def main():
                                 # Add the new graphs for batch analysis
                                 st.subheader("📊 Interactive CAI and Stop Codon Analysis (Batch)")
 
-                                for i, (name, seq) in enumerate(sequences):
-                                    st.markdown(f"### 🧬 Analysis for: {name}")
+                            for i, (name, seq) in enumerate(sequences):
+                                with st.expander(f"🧬 Analysis for: {name}", expanded=False):
                                     
                                     # Get CAI data
                                     cai_result, cai_error = run_single_optimization(seq, "In-Frame Analysis")
@@ -4719,8 +4813,7 @@ def main():
 
                                     else:
                                         st.warning(f"Could not generate CAI data for {name}.")
-                            else:
-                                st.warning("Analysis data not available for visualization.")
+                            
                                 
                                     
                     
