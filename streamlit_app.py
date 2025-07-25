@@ -3636,7 +3636,7 @@ def main():
             sequence_input = st.text_area(
                 "DNA Sequence",
                 height=150,
-                placeholder="Enter DNA sequence (A, T, G, C only) - CODING SEQUENCE ONLY",
+                placeholder="Enter DNA sequence (A, T, G, C only (U better)) - CODING SEQUENCE ONLY",
                 help="Paste your DNA sequence here. Spaces and newlines will be removed automatically. You can also transfer sequences from the CDS Database Search tab.",
                 key="sequence_input_area"
             )
