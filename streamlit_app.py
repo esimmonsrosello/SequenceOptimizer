@@ -1,8 +1,3 @@
-
-#Add mouse codon usage table
-#Make it so i can 3' tag vaccines with a peptide if/+1
-
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -217,94 +212,17 @@ def calculate_gc_window(sequence, position, window_size=25):
     return (gc_count / len(window_seq)) * 100
 
 @st.cache_data
-def load_immunogenic_peptides(file_paths=None):
-    """
-    Load immunogenic peptides from a list of Excel files.
-    Tries all files in order and concatenates the results.
-    """
-    import os
-    import pandas as pd
-
-    if file_paths is None or len(file_paths) == 0:
-        st.warning("No epitope file paths provided. Immunogenic peptide scanning disabled.")
-        return pd.DataFrame()
-
-    dataframes = []
-    for file_path in file_paths:
-        if os.path.exists(file_path):
-            try:
-                df = pd.read_excel(file_path)
-                
-                # Clean column names
-                df.columns = df.columns.str.strip()
-                
-                # Handle duplicate columns
-                seen_columns = {}
-                new_columns = []
-                for col in df.columns:
-                    if col in seen_columns:
-                        seen_columns[col] += 1
-                        new_columns.append(f"{col}_{seen_columns[col]}")
-                    else:
-                        seen_columns[col] = 0
-                        new_columns.append(col)
-                df.columns = new_columns
-                
-                # Identify Name column
-                name_column = None
-                possible_name_columns = ['Name', 'Name_1', 'Name_2', 'Name_3']
-                for col in possible_name_columns:
-                    if col in df.columns:
-                        name_column = col
-                        break
-                if name_column is None and len(df.columns) >= 3:
-                    name_column = df.columns[2]
-                if name_column is None:
-                    st.error(f"Could not find Name column in file {file_path}. Skipping this file.")
-                    continue
-                
-                # Clean and filter data
-                df_clean = df.dropna(subset=[name_column])
-                df_clean = df_clean[df_clean[name_column].notna()]
-                df_clean[name_column] = df_clean[name_column].astype(str).str.upper().str.strip()
-                df_clean = df_clean[df_clean[name_column].str.len() >= 3]
-                df_clean = df_clean[df_clean[name_column] != 'NAN']
-                df_clean = df_clean[df_clean[name_column] != '']
-
-                # Store the name column for reference
-                df_clean.attrs['epitope_column'] = name_column
-                
-                dataframes.append(df_clean)
-                st.success(f"Loaded {len(df_clean)} peptides from '{os.path.basename(file_path)}'")
-            
-            except Exception as e:
-                st.error(f"Error loading epitope file {file_path}: {str(e)}")
-                st.write(f"**Debug - Exception details:** {e}")
-        else:
-            st.warning(f"Epitope file {file_path} not found. Skipping.")
-    
-    if len(dataframes) == 0:
-        st.warning("No epitope data loaded from any files.")
-        return pd.DataFrame()
-    
-    # Concatenate all loaded dataframes, reset index
-    combined_df = pd.concat(dataframes, ignore_index=True)
-    
-    # You may want to keep only unique rows if duplicates exist
-    combined_df = combined_df.drop_duplicates(subset=[combined_df.attrs.get('epitope_column', 'Name')])
-    
-    st.success(f"Total immunogenic peptides loaded: {len(combined_df)}")
-    return combined_df
-
-
-def load_epitope_file(file_path):
+def load_immunogenic_peptides(file_path="epitope_table_export.xlsx"):
+    """Load immunogenic peptides from Excel file"""
     try:
         if os.path.exists(file_path):
             df = pd.read_excel(file_path)
-
-            # Clean column names - remove extra spaces
+            
+            
+            
+            # Clean column names - remove extra spaces and handle duplicates
             df.columns = df.columns.str.strip()
-
+            
             # Handle duplicate column names by keeping only the first occurrence
             seen_columns = {}
             new_columns = []
@@ -315,40 +233,50 @@ def load_epitope_file(file_path):
                 else:
                     seen_columns[col] = 0
                     new_columns.append(col)
+            
             df.columns = new_columns
-
+            
+            
+            
             # Look for the Name column (should be the 3rd column based on your structure)
             name_column = None
             possible_name_columns = ['Name', 'Name_1', 'Name_2', 'Name_3']
-
+            
             for col in possible_name_columns:
                 if col in df.columns:
                     name_column = col
                     break
-
-            # If still not found, use the 3rd column position
+            
+            # If still not found, try to find it by position (3rd column)
             if name_column is None and len(df.columns) >= 3:
-                name_column = df.columns[2]  # 0-indexed
-
+                name_column = df.columns[2]  # 3rd column (0-indexed)
+                
+            
             if name_column is None:
                 st.error(f"Could not find Name column. Available columns: {list(df.columns)}")
                 return pd.DataFrame()
-
+            
+            
+            
+            
+            
             # Clean and prepare the data
             df_clean = df.dropna(subset=[name_column])
             df_clean = df_clean[df_clean[name_column].notna()]
             df_clean[name_column] = df_clean[name_column].astype(str).str.upper().str.strip()
-
+            
             # Filter out very short sequences and invalid entries
             df_clean = df_clean[df_clean[name_column].str.len() >= 3]
             df_clean = df_clean[df_clean[name_column] != 'NAN']
             df_clean = df_clean[df_clean[name_column] != '']
-
+            
             # Store the column name for later use
             df_clean.attrs['epitope_column'] = name_column
-
+            
             st.success(f"Loaded {len(df_clean)} immunogenic peptides from column '{name_column}'")
-
+            
+           
+            
             return df_clean
         else:
             st.warning(f"Epitope file {file_path} not found. Immunogenic peptide scanning disabled.")
@@ -357,7 +285,6 @@ def load_epitope_file(file_path):
         st.error(f"Error loading epitope file {file_path}: {str(e)}")
         st.write(f"**Debug - Exception details:** {e}")
         return pd.DataFrame()
-
 
 def get_consistent_color_palette(n_colors, palette_type="optimization"):
     """Generate consistent color palettes for charts based on the active theme"""
@@ -810,14 +737,18 @@ def create_interactive_bar_chart(x_data, y_data, labels, title, color_scheme='vi
     
     return fig
 
-def create_interactive_pie_chart(values, labels, title):
+def create_interactive_pie_chart(values, labels, title, show_percentages=True):
     """Create interactive pie chart using the active theme"""
     theme_analysis_colors = get_consistent_color_palette(len(labels), "analysis")
+    
+    # For single sequence analysis, show absolute numbers
+    textinfo = 'label+percent' if show_percentages else 'label+value'
+    
     fig = go.Figure(data=go.Pie(
         labels=labels,
         values=values,
         hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percent}<extra></extra>',
-        textinfo='label+percent',
+        textinfo=textinfo,
         marker=dict(colors=theme_analysis_colors)
     ))
     
@@ -890,6 +821,99 @@ def create_interactive_stacked_bar_chart(x_data, y_data_dict, title, y_title):
     
     return fig
 
+def get_slippery_motif_positions(dna_seq):
+    """Get positions and details of slippery motifs in coding sequence"""
+    dna_seq_upper = dna_seq.upper().replace('U', 'T')
+    start_pos, end_pos = find_coding_sequence_bounds(dna_seq_upper)
+    
+    slippery_positions = []
+    
+    if start_pos is None:
+        return slippery_positions
+    
+    search_end = end_pos if end_pos is not None else len(dna_seq_upper) - 3
+    
+    for i in range(start_pos, search_end, 3):
+        if i+4 <= len(dna_seq_upper):
+            motif = dna_seq_upper[i:i+4]
+            if motif in Slippery_Motifs:
+                aa_position = ((i - start_pos) // 3) + 1  # Convert to amino acid position
+                slippery_positions.append({
+                    'motif': motif,
+                    'nucleotide_position': i + 1,  # 1-based nucleotide position
+                    'amino_acid_position': aa_position,
+                    'codon_position': f"{i+1}-{i+4}"  # Range of nucleotide positions
+                })
+    
+    return slippery_positions
+
+
+
+
+def create_interactive_cai_slippery_plot(positions, cai_weights, amino_acids, slippery_positions, seq_name, color='#4ECDC4'):
+    """Create interactive plot combining CAI weights and slippery motif locations"""
+    
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    
+    # Add CAI weights trace
+    fig.add_trace(
+        go.Scatter(
+            x=positions,
+            y=cai_weights,
+            mode='lines+markers',
+            name='CAI Weight',
+            line=dict(color=color, width=2),
+            marker=dict(size=4),
+            hovertemplate='<b>Position:</b> %{x}<br><b>CAI Weight:</b> %{y:.3f}<br><b>AA:</b> %{customdata}<extra></extra>',
+            customdata=amino_acids
+        ),
+        secondary_y=False,
+    )
+    
+    # Add slippery motif bars
+    if slippery_positions:
+        slippery_aa_positions = [pos['amino_acid_position'] for pos in slippery_positions]
+        slippery_motifs = [pos['motif'] for pos in slippery_positions]
+        
+        theme_colors = get_consistent_color_palette(1, "optimization")
+        fig.add_trace(
+            go.Bar(
+                x=slippery_aa_positions,
+                y=[1] * len(slippery_aa_positions),
+                name='Slippery Motifs',
+                marker_color=theme_colors['original'],
+                opacity=0.6,
+                width=0.8,
+                hovertemplate='<b>Position:</b> %{x}<br><b>Motif:</b> %{customdata}<extra></extra>',
+                customdata=slippery_motifs
+            ),
+            secondary_y=True,
+        )
+
+    # Set x-axis title
+    fig.update_xaxes(title_text="Amino Acid Position")
+    
+    # Set y-axes titles
+    fig.update_yaxes(title_text="CAI Weight", secondary_y=False, range=[0, 1])
+    fig.update_yaxes(title_text="Slippery Motif", secondary_y=True, showticklabels=False, range=[0, 1])
+    
+    # Update layout
+    fig.update_layout(
+        title=f'CAI Weights and Slippery Motif Locations - {seq_name}',
+        height=500,
+        hovermode='x unified',
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        ),
+        margin=dict(t=50, b=50, l=50, r=50)
+    )
+    
+    return fig
+
 def create_enhanced_chart(data, chart_type, title, colors=None, xlabel="Sequence", ylabel="Value"):
     """Create enhanced charts with consistent styling"""
     fig, ax = plt.subplots(figsize=(12, 8))
@@ -952,8 +976,6 @@ def calculate_enhanced_summary_stats(result, original_seq=""):
         try:
             weights = [float(w) for w in result['CAI_Weights'].split(',')]
             stats['Average_CAI'] = f"{sum(weights)/len(weights):.3f}"
-            stats['Min_CAI'] = f"{min(weights):.3f}"
-            stats['Max_CAI'] = f"{max(weights):.3f}"
         except:
             pass
     
@@ -1152,7 +1174,7 @@ def adjust_gc_content(sequence, max_gc=70.0, min_gc=55.0):
 
     final_sequence = "".join(new_codons)
     final_gc = calculate_gc_content(final_sequence)
-    st.success(f"GC content adjusted from {calculate_gc_content(sequence):.1f}% to {final_gc:.1f}%.")
+    st.success(f"GC content adjusted from {calculate_gc_content(sequence):.1f}% to {final_gc:.1f}%")
     
     return final_sequence
 
@@ -1267,11 +1289,10 @@ def generate_detailed_mrna_summary(processed_cds, final_mrna_sequence, utr_5, ut
     # CAI
     cai_weights, _ = get_codon_weights_row(processed_cds)
     if cai_weights:
-        summary_data["Metric"].extend(["Average CAI", "Min CAI", "Max CAI"])
+        summary_data["Metric"].extend(["Average CAI", "Sequence Length"])
         summary_data["Value"].extend([
             f"{sum(cai_weights)/len(cai_weights):.3f}",
-            f"{min(cai_weights):.3f}",
-            f"{max(cai_weights):.3f}"
+            f"{len(processed_cds)} bp"
         ])
 
     # +1 Stops
@@ -2064,6 +2085,16 @@ class NCBISearchEngine:
                     
                     # Extract ORIGIN sequence
                     origin_sequence = self.extract_origin_from_genbank(raw_data)
+                    
+                    if origin_sequence:
+                        st.write(f"✅ **ORIGIN sequence:** {len(origin_sequence)} bases")
+                        st.write(f"**Sample:** {origin_sequence[:50]}...")
+
+                    
+                    if origin_sequence:
+                        st.write(f"✅ **ORIGIN sequence:** {len(origin_sequence)} bases")
+                        st.write(f"**Sample:** {origin_sequence[:50]}...")
+
                     
                     if origin_sequence:
                         st.write(f"✅ **ORIGIN sequence:** {len(origin_sequence)} bases")
@@ -3681,48 +3712,49 @@ def main():
                                 colors['optimized']
                             )
                             
-                            st.plotly_chart(fig, use_container_width=True)
+                            st.plotly_chart(fig, use_container_width=True, key="single_in_frame_cai_gc_plot")
                             
-                            # Statistics including GC content
-                            col_stat1, col_stat2, col_stat3, col_stat4, col_stat5, col_stat6 = st.columns(6)
-                            with col_stat1:
-                                st.metric("Average CAI", f"{np.mean(cai_weights):.3f}")
-                            with col_stat2:
-                                st.metric("Min CAI", f"{np.min(cai_weights):.3f}")
-                            with col_stat3:
-                                st.metric("Max CAI", f"{np.max(cai_weights):.3f}")
-                            with col_stat4:
-                                low_cai_count = sum(1 for w in cai_weights if w < 0.5)
-                                st.metric("Low CAI (<0.5)", f"{low_cai_count}/{len(cai_weights)}")
-                            with col_stat5:
-                                # Calculate GC content from the original sequence
-                                gc_content = calculate_gc_content(sequence_input)
+                            st.subheader("📊 Summary Statistics")
+                            # Calculate enhanced summary stats
+                            sequence_length = len(sequence_input.replace('\n', '').replace(' ', ''))
+                            protein_length = len(df['Amino_Acid']) if 'Amino_Acid' in df else 0
+                            gc_content = calculate_gc_content(sequence_input)
+                            average_cai = np.mean(df['CAI_Weight']) if 'CAI_Weight' in df else 0
+                            slippery_motifs = number_of_slippery_motifs(sequence_input)
+
+                            col_sum1, col_sum2, col_sum3, col_sum4 = st.columns(4)
+                            with col_sum1:
+                                st.metric("Sequence Length", f"{sequence_length} bp")
+                            with col_sum2:
+                                st.metric("Protein Length", f"{protein_length} aa")
+                            with col_sum3:
                                 st.metric("GC Content", f"{gc_content:.1f}%")
-                            with col_stat6:
-                                slippery_motifs = number_of_slippery_motifs(sequence_input)
-                                st.metric("Slippery Motifs", slippery_motifs)
-                            
-                            # Interactive data table
-                            st.subheader("📋 Detailed Results")
+                            with col_sum4:
+                                st.metric("Average CAI", f"{average_cai:.3f}")
+
+                            st.metric("Slippery Motifs", slippery_motifs)
+
+                            with st.expander("View Detailed In-Frame Data"):
+                                st.dataframe(df, use_container_width=True)
+                                
+                        # Slippery motif locations
+                        st.subheader("📍 Slippery Motif Locations")
+                        slippery_positions = get_slippery_motif_positions(sequence_input)
+                        if slippery_positions:
+                            slippery_df = pd.DataFrame(slippery_positions)
+                            slippery_df.columns = ['Motif', 'Nucleotide Position', 'Amino Acid Position', 'Codon Range']
+                            st.dataframe(slippery_df, use_container_width=True, hide_index=True)
+                        else:
+                            st.info("✅ No slippery motifs (TTTT or TTTC) found in the coding sequence.")
+
+                        with st.expander("View Detailed In-Frame Data"):
                             st.dataframe(df, use_container_width=True)
-                            
-                            # Download button
-                            excel_data = create_download_link(df, f"InFrame_Analysis_{len(sequence_input)}bp.xlsx")
-                            st.download_button(
-                                label="Download Results (Excel)",
-                                data=excel_data,
-                                file_name=f"InFrame_Analysis_{len(sequence_input)}bp.xlsx",
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                            )
                         
                     elif optimization_method == "+1 Frame Analysis":
                         st.subheader("+1 Frame Analysis Results")
                         
                         # Load immunogenic peptides
-                        epitope_df = load_immunogenic_peptides(file_paths=[
-                                        os.path.join(os.path.dirname(__file__), "epitope_table_export.xlsx"),
-                                        os.path.join(os.path.dirname(__file__), "epitope_table_export_1752673251.xlsx")
-                                    ])
+                        epitope_df = load_immunogenic_peptides()
                         
                         # Create metrics display using full width
                         metric_col1, metric_col2, metric_col3, metric_col4, metric_col5, metric_col6 = st.columns(6)
@@ -3758,8 +3790,8 @@ def main():
                                 if result['Plus1_TGA_Count'] > 0:
                                     pie_data_plus1.append(result['Plus1_TGA_Count'])
                                     pie_labels_plus1.append('TGA')
-                                
-                                fig_pie_plus1 = create_interactive_pie_chart(pie_data_plus1, pie_labels_plus1, "+1 Frame Stop Codon Distribution")
+
+                                fig_pie_plus1 = create_interactive_pie_chart(pie_data_plus1, pie_labels_plus1, "+1 Frame Stop Codon Distribution", show_percentages=False)
                                 st.plotly_chart(fig_pie_plus1, use_container_width=True, key="single_plus1_pie_chart")
                             else:
                                 st.info("No +1 frame stop codons found.")
@@ -3779,8 +3811,8 @@ def main():
                                 if result['minus1_TGA_Count'] > 0:
                                     pie_data_minus1.append(result['minus1_TGA_Count'])
                                     pie_labels_minus1.append('TGA')
-                                
-                                fig_pie_minus1 = create_interactive_pie_chart(pie_data_minus1, pie_labels_minus1, "-1 Frame Stop Codon Distribution")
+
+                                fig_pie_minus1 = create_interactive_pie_chart(pie_data_minus1, pie_labels_minus1, "-1 Frame Stop Codon Distribution", show_percentages=False)
                                 st.plotly_chart(fig_pie_minus1, use_container_width=True, key="single_minus1_pie_chart")
                             else:
                                 st.info("No -1 frame stop codons found.")
@@ -3809,7 +3841,52 @@ def main():
                             st.metric(label="Total Count", value=result.get('Slippery_Motifs', 0))
 
                         st.divider()
-                        
+                        # Add the new graphs for single sequence analysis (matching batch analysis)
+                        st.subheader("📊 Interactive CAI and Stop Codon Analysis")
+
+                        # Get CAI data
+                        cai_result, cai_error = run_single_optimization(sequence_input, "In-Frame Analysis")
+                        if not cai_error and isinstance(cai_result, dict) and 'Position' in cai_result:
+                            cai_df = pd.DataFrame(cai_result)
+                            positions = cai_df['Position'].tolist()
+                            cai_weights = cai_df['CAI_Weight'].tolist()
+                            amino_acids = cai_df['Amino_Acid'].tolist()
+
+                            # Get stop codon positions
+                            plus1_stop_positions = get_plus1_stop_positions(sequence_input)
+                            minus1_stop_positions = get_minus1_stop_positions(sequence_input)
+
+                            # Create +1 stop codon plot
+                            if plus1_stop_positions:
+                                fig_plus1 = create_interactive_cai_stop_codon_plot(
+                                    positions,
+                                    cai_weights,
+                                    amino_acids,
+                                    plus1_stop_positions,
+                                    f"Sequence ({len(sequence_input)} bp)",
+                                    "+1 Frame"
+                                )
+                                st.plotly_chart(fig_plus1, use_container_width=True, key="single_plus1_cai_stop_plot")
+                            else:
+                                st.info("No +1 stop codons found to plot against CAI.")
+
+                            # Create -1 stop codon plot
+                            if minus1_stop_positions:
+                                fig_minus1 = create_interactive_cai_stop_codon_plot(
+                                    positions,
+                                    cai_weights,
+                                    amino_acids,
+                                    minus1_stop_positions,
+                                    f"Sequence ({len(sequence_input)} bp)",
+                                    "-1 Frame"
+                                )
+                                st.plotly_chart(fig_minus1, use_container_width=True, key="single_minus1_cai_stop_plot")
+                            else:
+                                st.info("No -1 stop codons found to plot against CAI.")
+                        else:
+                            st.warning("Could not generate CAI data for stop codon plots.")
+
+                        st.divider()
                         
                         # IMMUNOGENIC PEPTIDE SCANNING - NEW SECTION
                         if not epitope_df.empty:
@@ -3837,7 +3914,7 @@ def main():
                                 st.metric("Epitopes in Database", len(epitope_df))
                             
                             if total_findings > 0:
-                                st.warning(f"⚠️ **ALERT**: Found {total_findings} immunogenic peptides in alternative reading frames!")
+                                st.warning(f"⚠️ **WHOOPSIE**: Found {total_findings} immunogenic peptides in alternative reading frames!")
                                 
                                 # Create detailed summary
                                 summary_df = create_immunogenic_peptide_summary(plus1_findings, minus1_findings)
@@ -3849,12 +3926,12 @@ def main():
                                     if plus1_findings:
                                         with st.expander(f"🔍 +1 Frame Epitopes ({len(plus1_findings)} found)", expanded=True):
                                             for i, finding in enumerate(plus1_findings, 1):
-                                                st.write(f"**{i}.** `{finding['epitope']}` at position {finding['position']}-{finding['end_position']}")
-                                    
+                                                st.write(f"**{i}.** `{finding['epitope']}` at position {finding['position']}-{finding['end_position']}'")
+
                                     if minus1_findings:
                                         with st.expander(f"🔍 -1 Frame Epitopes ({len(minus1_findings)} found)", expanded=True):
                                             for i, finding in enumerate(minus1_findings, 1):
-                                                st.write(f"**{i}.** `{finding['epitope']}` at position {finding['position']}-{finding['end_position']}")
+                                                st.write(f"**{i}.** `{finding['epitope']}` at position {finding['position']}-{finding['end_position']}'")
                                     
                                     # Download button for epitope findings
                                     if summary_df is not None:
@@ -3871,53 +3948,6 @@ def main():
                         
                         else:
                             st.info("ℹ️ Immunogenic peptide scanning disabled - epitope_table_export.xlsx not found")
-                        
-                        
-
-                        # Get CAI data
-                        st.divider()
-                        st.subheader("Location of Out-of-Frame Stop Codons")
-                        
-                        cai_result, cai_error = run_single_optimization(sequence_input, "In-Frame Analysis")
-                        if not cai_error and cai_result:
-                            cai_df = pd.DataFrame(cai_result)
-                            positions = cai_df['Position'].tolist()
-                            cai_weights = cai_df['CAI_Weight'].tolist()
-                            amino_acids = cai_df['Amino_Acid'].tolist()
-
-                            # Get stop codon positions
-                            plus1_stop_positions = get_plus1_stop_positions(sequence_input)
-                            minus1_stop_positions = get_minus1_stop_positions(sequence_input)
-
-                            # Create +1 stop codon plot
-                            if plus1_stop_positions:
-                                fig_plus1 = create_interactive_cai_stop_codon_plot(
-                                    positions,
-                                    cai_weights,
-                                    amino_acids,
-                                    plus1_stop_positions,
-                                    f"Sequence ({len(sequence_input)} bp)",
-                                    "+1 Frame"
-                                )
-                                st.plotly_chart(fig_plus1, use_container_width=True)
-                            else:
-                                st.info("No +1 stop codons found to plot against CAI.")
-
-                            # Create -1 stop codon plot
-                            if minus1_stop_positions:
-                                fig_minus1 = create_interactive_cai_stop_codon_plot(
-                                    positions,
-                                    cai_weights,
-                                    amino_acids,
-                                    minus1_stop_positions,
-                                    f"Sequence ({len(sequence_input)} bp)",
-                                    "-1 Frame"
-                                )
-                                st.plotly_chart(fig_minus1, use_container_width=True)
-                            else:
-                                st.info("No -1 stop codons found to plot against CAI.")
-                        else:
-                            st.warning("Could not generate CAI data for stop codon plots.")
                         
                     else:
                         # Standard optimization results
@@ -4143,26 +4173,53 @@ def main():
                                             color
                                         )
                                         
-                                        st.plotly_chart(fig, use_container_width=True)
+                                        st.plotly_chart(fig, use_container_width=True, key=f"batch_in_frame_gc_{i}")
                                         
                                         # Statistics including GC content
-                                        col_stat1, col_stat2, col_stat3, col_stat4, col_stat5, col_stat6 = st.columns(6)
+                                        col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
                                         with col_stat1:
                                             st.metric("Average CAI", f"{np.mean(cai_weights):.3f}")
                                         with col_stat2:
-                                            st.metric("Min CAI", f"{np.min(cai_weights):.3f}")
+                                            st.metric("Sequence Length", f"{len(seq_sequence)} bp")
                                         with col_stat3:
-                                            st.metric("Max CAI", f"{np.max(cai_weights):.3f}")
-                                        with col_stat4:
-                                            low_cai_count = sum(1 for w in cai_weights if w < 0.5)
-                                            st.metric("Low CAI (<0.5)", f"{low_cai_count}/{len(cai_weights)}")
-                                        with col_stat5:
-                                            # Calculate GC content for this sequence
+                                            # Calculate GC content from the original sequence
                                             gc_content = calculate_gc_content(seq_sequence)
                                             st.metric("GC Content", f"{gc_content:.1f}%")
-                                        with col_stat6:
+                                        with col_stat4:
                                             slippery_motifs = number_of_slippery_motifs(seq_sequence)
                                             st.metric("Slippery Motifs", slippery_motifs)
+
+                                
+
+                                        # Add slippery motif location analysis
+                                        st.subheader("📍 Slippery Motif Locations")
+
+                                        slippery_positions = get_slippery_motif_positions(seq_sequence)
+
+                                        if slippery_positions:
+                                            
+
+                                            # Show detailed table of slippery motif positions
+                                            st.markdown("#### 📋 Detailed Slippery Motif Positions")
+                                            slippery_df = pd.DataFrame(slippery_positions)
+                                            slippery_df.columns = ['Motif', 'Nucleotide Position', 'Amino Acid Position', 'Codon Range']
+
+                                            st.dataframe(slippery_df, use_container_width=True, hide_index=True)
+
+                                            # Download slippery motif data
+                                            excel_data = create_download_link(slippery_df, f"Slippery_Motifs_{len(slippery_positions)}_found.xlsx")
+
+                                            st.download_button(
+                                                label="📥 Download Slippery Motif Positions (Excel)",
+                                                data=excel_data,
+                                                file_name=f"Slippery_Motifs_{len(slippery_positions)}_found.xlsx",
+                                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                                help="Download detailed positions of slippery motifs",
+                                                key=f"download_slippery_{i}"
+                                            )
+                                        else:
+                                            st.info("✅ No slippery motifs (TTTT or TTTC) found in the coding sequence.")
+
                                         
                                         # Data table in expandable section
                                         with st.expander(f"📋 View detailed In-Frame data for {seq_name}"):
@@ -4291,13 +4348,7 @@ def main():
                                         st.info("No sequences with +1 frame stops found for individual visualization.")
                                 
                                 # BATCH IMMUNOGENIC PEPTIDE SCANNING - NEW SECTION
-                                    epitope_df = load_immunogenic_peptides(file_paths=[
-                                        os.path.join(os.path.dirname(__file__), "epitope_table_export.xlsx"),
-                                        os.path.join(os.path.dirname(__file__), "epitope_table_export_1752673251.xlsx")
-                                    ])
-                               
-                                
-                            
+                                    epitope_df = load_immunogenic_peptides()
                                     
                                     if not epitope_df.empty:
                                         st.subheader("🔬 Batch Immunogenic Peptide Scanning")
@@ -4465,7 +4516,7 @@ def main():
                                         'Slippery Sites per 100bp by Type',
                                         'Slippery Sites per 100bp'
                                     )
-                                    st.plotly_chart(slippery_fig, use_container_width=True)
+                                    st.plotly_chart(slippery_fig, use_container_width=True, key="batch_slippery_fig")
 
                                 else:
                                     st.info("No +1 frame stop codons found in any sequence.")
@@ -4606,7 +4657,7 @@ def main():
                                             '-1 Frame Stops per 100bp by Type',
                                             '-1 Frame Stops per 100bp'
                                         )
-                                        st.plotly_chart(stops_fig, use_container_width=True)
+                                        st.plotly_chart(stops_fig, use_container_width=True, key="batch_minus1_stops_fig")
 
                                     else:
                                         st.info("No -1 frame stop codons found in any sequence.")
@@ -4643,7 +4694,7 @@ def main():
                                                 name,
                                                 "+1 Frame"
                                             )
-                                            st.plotly_chart(fig_plus1, use_container_width=True)
+                                            st.plotly_chart(fig_plus1, use_container_width=True, key=f"batch_plus1_cai_stop_plot_{i}")
                                         else:
                                             st.info(f"No +1 stop codons found in {name} to plot against CAI.")
 
@@ -4657,7 +4708,7 @@ def main():
                                                 name,
                                                 "-1 Frame"
                                             )
-                                            st.plotly_chart(fig_minus1, use_container_width=True)
+                                            st.plotly_chart(fig_minus1, use_container_width=True, key=f"batch_minus1_cai_stop_plot_{i}")
                                         else:
                                             st.info(f"No -1 stop codons found in {name} to plot against CAI.")
                                         
@@ -4838,7 +4889,7 @@ def main():
                                                 '+1 Frame Stops',
                                                 'Number of Stops'
                                             )
-                                            st.plotly_chart(stops_comparison_fig, use_container_width=True)
+                                            st.plotly_chart(stops_comparison_fig, use_container_width=True, key="batch_stops_comparison_fig")
                                         
                                         with col_chart2:
                                             # GC Content Comparison
@@ -4849,7 +4900,7 @@ def main():
                                                 'GC Content',
                                                 'GC Content (%)'
                                             )
-                                            st.plotly_chart(gc_comparison_fig, use_container_width=True)
+                                            st.plotly_chart(gc_comparison_fig, use_container_width=True, key="batch_gc_comparison_fig")
                                         
                                         # CAI Comparison
                                         if 'Original_CAI' in metrics_df.columns and 'Optimized_CAI' in metrics_df.columns:
@@ -4862,7 +4913,7 @@ def main():
                                                 'CAI Score',
                                                 'CAI (Codon Adaptation Index)'
                                             )
-                                            st.plotly_chart(cai_comparison_fig, use_container_width=True)
+                                            st.plotly_chart(cai_comparison_fig, use_container_width=True, key="batch_cai_comparison_fig")
                                         
                                         # Summary statistics table - UPDATED
                                         st.markdown("#### 📋 Optimization Summary Report")
@@ -5870,10 +5921,8 @@ def main():
                     summary_df = generate_detailed_mrna_summary(full_cds, final_mrna_sequence, JT_5_UTR, JT_3_UTR)
                     st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
-                    epitope_df = load_immunogenic_peptides(file_paths=[
-                                                            os.path.join(os.path.dirname(__file__), "epitope_table_export.xlsx"),
-                                                            os.path.join(os.path.dirname(__file__), "epitope_table_export_1752673251.xlsx")
-                                                        ])
+                    epitope_df = load_immunogenic_peptides()
+
                     if not epitope_df.empty:
                         st.subheader("🔬 Immunogenic Peptide Scanning (mRNA Design)")
                         
@@ -6070,9 +6119,8 @@ def main():
             # Format linker options for display
             linker_names = list(LINKER_OPTIONS.keys())
             
-            st.markdown("##### Inter-Peptide Linker")
             selected_linker_name = st.selectbox(
-                "Select Linker between peptides:",
+                "Select Linker:",
                 linker_names,
                 key="cancer_vaccine_linker_selection"
             )
@@ -6082,37 +6130,7 @@ def main():
             
             linker_repeats = 1
             if selected_linker_name in ["(G₄S)n linker", "EAAAK linker", "(XP)n linker"]:
-                linker_repeats = st.slider("Number of inter-peptide linker repeats:", 1, 5, 1, key="cancer_linker_repeats")
-
-            st.markdown("##### Pre-Peptide Linker (after Signal Peptide, before first peptide)")
-            selected_pre_linker_name = st.selectbox(
-                "Select Pre-Peptide Linker:",
-                ["None"] + linker_names,
-                key="cancer_vaccine_pre_linker_selection"
-            )
-            pre_linker_info = LINKER_OPTIONS.get(selected_pre_linker_name, {"sequence_aa": "", "type": "N/A", "purpose": "N/A"})
-            if selected_pre_linker_name != "None":
-                st.info(f"**Type:** {pre_linker_info['type']}\n\n**Purpose:** {pre_linker_info['purpose']}\n\n**Amino Acid Sequence:** {pre_linker_info['sequence_aa']}")
-                pre_linker_repeats = 1
-                if selected_pre_linker_name in ["(G₄S)n linker", "EAAAK linker", "(XP)n linker"]:
-                    pre_linker_repeats = st.slider("Number of pre-peptide linker repeats:", 1, 5, 1, key="cancer_pre_linker_repeats")
-            else:
-                pre_linker_repeats = 0 # No repeats if no linker selected
-
-            st.markdown("##### Post-Peptide Linker (after last peptide/MITD, before Stop Codon)")
-            selected_post_linker_name = st.selectbox(
-                "Select Post-Peptide Linker:",
-                ["None"] + linker_names,
-                key="cancer_vaccine_post_linker_selection"
-            )
-            post_linker_info = LINKER_OPTIONS.get(selected_post_linker_name, {"sequence_aa": "", "type": "N/A", "purpose": "N/A"})
-            if selected_post_linker_name != "None":
-                st.info(f"**Type:** {post_linker_info['type']}\n\n**Purpose:** {post_linker_info['purpose']}\n\n**Amino Acid Sequence:** {post_linker_info['sequence_aa']}")
-                post_linker_repeats = 1
-                if selected_post_linker_name in ["(G₄S)n linker", "EAAAK linker", "(XP)n linker"]:
-                    post_linker_repeats = st.slider("Number of post-peptide linker repeats:", 1, 5, 1, key="cancer_post_linker_repeats")
-            else:
-                post_linker_repeats = 0 # No repeats if no linker selected
+                linker_repeats = st.slider("Number of linker repeats:", 1, 5, 1, key="cancer_linker_repeats")
             
             # Step 4: Signal Peptide Selection
             st.markdown("#### Signal Peptide Selection")
@@ -6170,11 +6188,7 @@ def main():
                         # 1. Start with signal peptide
                         full_aa_sequence = selected_sp_info['sequence_aa']
                         
-                        # 2. Add pre-peptide linker if selected
-                        if selected_pre_linker_name != "None":
-                            full_aa_sequence += pre_linker_info['sequence_aa'] * pre_linker_repeats
-
-                        # 3. Add peptides with inter-peptide linkers
+                        # 2. Add peptides with linkers
                         linker_aa_sequence = selected_linker_info['sequence_aa'] * linker_repeats
                         
                         for i, peptide in enumerate(peptide_sequences):
@@ -6184,18 +6198,14 @@ def main():
                             # Add peptide
                             full_aa_sequence += clean_peptide
                             
-                            # Add inter-peptide linker after all peptides except the last one
+                            # Add linker after all peptides except the last one
                             if i < len(peptide_sequences) - 1:
                                 full_aa_sequence += linker_aa_sequence
                         
-                        # 4. Add MITD if selected
+                        # 3. Add MITD if selected
                         if add_mitd:
                             mitd_aa_sequence = "STQALNTVYTKLNIRLRQGRTLYTILNLA"
                             full_aa_sequence += mitd_aa_sequence
-
-                        # 5. Add post-peptide linker if selected
-                        if selected_post_linker_name != "None":
-                            full_aa_sequence += post_linker_info['sequence_aa'] * post_linker_repeats
                         
                         # Reverse translate to nucleotide sequence
                         full_cds = reverse_translate_highest_cai(full_aa_sequence)
@@ -6264,13 +6274,6 @@ def main():
                             "Length (bp)": [len(JT_5_UTR), len(signal_peptide_dna)]
                         }
                         
-                        # Add pre-peptide linker if selected
-                        if selected_pre_linker_name != "None":
-                            components_data["Component"].append("Pre-Peptide Linker")
-                            components_data["Type"].append(pre_linker_info['type'])
-                            components_data["Length (aa)"].append(len(pre_linker_info['sequence_aa']) * pre_linker_repeats)
-                            components_data["Length (bp)"].append(len(pre_linker_info['sequence_aa']) * pre_linker_repeats * 3)
-
                         # Add peptides and linkers
                         for i, peptide in enumerate(peptide_sequences):
                             clean_peptide = peptide.strip().upper()
@@ -6291,13 +6294,6 @@ def main():
                             components_data["Type"].append("Transport Domain")
                             components_data["Length (aa)"].append(30)  # Length of MITD
                             components_data["Length (bp)"].append(90)  # 30 aa * 3 bp/aa
-
-                        # Add post-peptide linker if selected
-                        if selected_post_linker_name != "None":
-                            components_data["Component"].append("Post-Peptide Linker")
-                            components_data["Type"].append(post_linker_info['type'])
-                            components_data["Length (aa)"].append(len(post_linker_info['sequence_aa']) * post_linker_repeats)
-                            components_data["Length (bp)"].append(len(post_linker_info['sequence_aa']) * post_linker_repeats * 3)
                         
                         # Add 3' UTR
                         components_data["Component"].append("3' UTR")
@@ -6320,10 +6316,8 @@ def main():
                         st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
                         # ADD IMMUNOGENIC PEPTIDE SCANNING HERE
-                        epitope_df = load_immunogenic_peptides(file_paths=[
-                                                                os.path.join(os.path.dirname(__file__), "epitope_table_export.xlsx"),
-                                                                os.path.join(os.path.dirname(__file__), "epitope_table_export_1752673251.xlsx")
-                                                            ])
+                        epitope_df = load_immunogenic_peptides()
+
                         if not epitope_df.empty:
                             st.subheader("🔬 Immunogenic Peptide Scanning (Cancer Vaccine)")
                             
@@ -6423,7 +6417,7 @@ def main():
                                     processed_cds,
                                     "Processed CDS"
                                 )
-                                st.plotly_chart(fig_cai_gc, use_container_width=True)
+                                st.plotly_chart(fig_cai_gc, use_container_width=True, key="cancer_vaccine_cai_gc_plot")
                             else:
                                 st.warning("Could not generate CAI/GC plot.")
                         
@@ -6435,7 +6429,7 @@ def main():
                                 stop_labels = ['TAA', 'TAG', 'TGA']
                                 stop_values = [plus1_stops['TAA'], plus1_stops['TAG'], plus1_stops['TGA']]
                                 fig_pie = create_interactive_pie_chart(stop_values, stop_labels, "+1 Stop Codon Distribution")
-                                st.plotly_chart(fig_pie, use_container_width=True)
+                                st.plotly_chart(fig_pie, use_container_width=True, key="cancer_vaccine_stop_pie_chart")
                             else:
                                 st.info("No +1 stop codons found in the processed CDS.")
 
@@ -6453,6 +6447,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
     
     
     
