@@ -1,3 +1,6 @@
+#Add mouse codon usage table#Make it so i can 3' tag vaccines with a peptide if/+1
+
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -26,7 +29,7 @@ from datetime import datetime
 
 # Configure page
 st.set_page_config(
-    page_title="Harmonized Optimization of Oligos and Frames",
+    page_title="🐎 Harmonized Optimization of Oligos and Frames",
     page_icon=":horse:",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -3479,8 +3482,8 @@ def main():
     if 'uniprot_engine' not in st.session_state:
         st.session_state.uniprot_engine = UniProtSearchEngine()
         
-    st.title("Harmonized Optimization of Oligos and Frames")
-    st.markdown("DNA sequence optimization and analysis")
+    st.title("🐎 Harmonized Optimization of Oligos and Frames")
+    st.markdown("Welcome to HOOF: your DNA sequence optimization and analysis companion!")
 
     with st.expander("Read Me"):
         st.markdown('''
@@ -3636,7 +3639,7 @@ def main():
             sequence_input = st.text_area(
                 "DNA Sequence",
                 height=150,
-                placeholder="Enter DNA sequence (A, T, G, C only (U better)) - CODING SEQUENCE ONLY",
+                placeholder="Enter DNA sequence (A, T, G, C only) - CODING SEQUENCE ONLY",
                 help="Paste your DNA sequence here. Spaces and newlines will be removed automatically. You can also transfer sequences from the CDS Database Search tab.",
                 key="sequence_input_area"
             )
