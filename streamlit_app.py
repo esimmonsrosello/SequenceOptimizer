@@ -593,6 +593,40 @@ def create_geneious_like_visualization(utr5_seq, cds_seq, utr3_seq, signal_pepti
     # Add explanation
     st.info("💡 **Reading Guide**: In coding regions, nucleotides are grouped by codons (3 letters) with the corresponding amino acid shown below each codon.")
 
+def find_coding_sequence_bounds(dna_seq):
+    """Find start and stop positions of coding sequence, prioritizing ACCATG."""
+    dna_seq_upper = dna_seq.upper().replace('U', 'T')
+    stop_codons = {"TAA", "TAG", "TGA"}
+    
+    start_pos = None
+    
+    # Always prioritize finding the ACCATG Kozak sequence.
+    accatg_pos = dna_seq_upper.find('ACCATG')
+    if accatg_pos != -1:
+        # The actual start codon (ATG) begins 3 bases into "ACCATG".
+        start_pos = accatg_pos + 3
+    else:
+        # Fallback: if no ACCATG, find the first occurrence of ATG.
+        atg_pos = dna_seq_upper.find('ATG')
+        if atg_pos != -1:
+            # The sequence starts at the beginning of the first ATG found.
+            start_pos = atg_pos
+            
+    if start_pos is None:
+        # If no start codon is found at all, we can't proceed.
+        return None, None
+    
+    # Find end position - first in-frame stop codon, starting from our found start_pos.
+    end_pos = None
+    for i in range(start_pos, len(dna_seq_upper) - 2, 3):
+        codon = dna_seq_upper[i:i+3]
+        if len(codon) == 3 and codon in stop_codons:
+            end_pos = i  # Position of the stop codon itself.
+            break
+            
+    return start_pos, end_pos
+
+
 def create_interactive_cai_gc_plot(positions, cai_weights, amino_acids, sequence, seq_name, color='#4ECDC4'):
     """Create interactive plot combining CAI weights and GC content"""
     
@@ -824,31 +858,7 @@ def create_interactive_stacked_bar_chart(x_data, y_data_dict, title, y_title):
     
     return fig
 
-def get_slippery_motif_positions(dna_seq):
-    """Get positions and details of slippery motifs in coding sequence"""
-    dna_seq_upper = dna_seq.upper().replace('U', 'T')
-    start_pos, end_pos = find_coding_sequence_bounds(dna_seq_upper)
-    
-    slippery_positions = []
-    
-    if start_pos is None:
-        return slippery_positions
-    
-    search_end = end_pos if end_pos is not None else len(dna_seq_upper) - 3
-    
-    for i in range(start_pos, search_end, 3):
-        if i+4 <= len(dna_seq_upper):
-            motif = dna_seq_upper[i:i+4]
-            if motif in Slippery_Motifs:
-                aa_position = ((i - start_pos) // 3) + 1  # Convert to amino acid position
-                slippery_positions.append({
-                    'motif': motif,
-                    'nucleotide_position': i + 1,  # 1-based nucleotide position
-                    'amino_acid_position': aa_position,
-                    'codon_position': f"{i+1}-{i+4}"  # Range of nucleotide positions
-                })
-    
-    return slippery_positions
+
 
 
 
@@ -991,25 +1001,21 @@ def calculate_enhanced_summary_stats(result, original_seq=""):
     return stats
 
 def count_specific_slippery_motifs(dna_seq):
-    """Count specific slippery motifs (TTTT and TTTC) in coding sequence"""
+    """Count slippery motifs (TTTT and TTTC) in coding frame (frame 0) as TTT + T/C"""
     dna_seq_upper = dna_seq.upper().replace('U', 'T')
     start_pos, end_pos = find_coding_sequence_bounds(dna_seq_upper)
-    
     counts = {'TTTT': 0, 'TTTC': 0, 'total': 0}
-    
     if start_pos is None:
         return counts
-    
-    search_end = end_pos if end_pos is not None else len(dna_seq_upper) - 3
-    
+    search_end = end_pos if end_pos is not None else len(dna_seq_upper) - 4
     for i in range(start_pos, search_end, 3):
-        if i+4 <= len(dna_seq_upper):
-            motif = dna_seq_upper[i:i+4]
-            if motif == 'TTTT':
+        codon = dna_seq_upper[i:i+3]
+        next_base = dna_seq_upper[i+3] if i+3 < len(dna_seq_upper) else ''
+        if codon == 'TTT':
+            if next_base == 'T':
                 counts['TTTT'] += 1
-            elif motif == 'TTTC':
+            elif next_base == 'C':
                 counts['TTTC'] += 1
-    
     counts['total'] = counts['TTTT'] + counts['TTTC']
     return counts
 
@@ -1382,50 +1388,40 @@ def get_codon_weights_row(dna_seq):
     weights = [codon_weights.get(c, 1e-6) for c in codons_list]
     return weights, codons_list
 
-def find_coding_sequence_bounds(dna_seq):
-    """Find start and stop positions of coding sequence, prioritizing ACCATG."""
-    dna_seq_upper = dna_seq.upper().replace('U', 'T')
-    stop_codons = {"TAA", "TAG", "TGA"}
-    
-    start_pos = None
-    
-    # Always prioritize finding the ACCATG Kozak sequence.
-    accatg_pos = dna_seq_upper.find('ACCATG')
-    if accatg_pos != -1:
-        # The actual start codon (ATG) begins 3 bases into "ACCATG".
-        start_pos = accatg_pos + 3
-    else:
-        # Fallback: if no ACCATG, find the first occurrence of ATG.
-        atg_pos = dna_seq_upper.find('ATG')
-        if atg_pos != -1:
-            # The sequence starts at the beginning of the first ATG found.
-            start_pos = atg_pos
-            
-    if start_pos is None:
-        # If no start codon is found at all, we can't proceed.
-        return None, None
-    
-    # Find end position - first in-frame stop codon, starting from our found start_pos.
-    end_pos = None
-    for i in range(start_pos, len(dna_seq_upper) - 2, 3):
-        codon = dna_seq_upper[i:i+3]
-        if len(codon) == 3 and codon in stop_codons:
-            end_pos = i  # Position of the stop codon itself.
-            break
-            
-    return start_pos, end_pos
 
 def number_of_slippery_motifs(dna_seq):
-    """Count slippery motifs in coding sequence"""
     dna_seq_upper = dna_seq.upper().replace('U', 'T')
-    start_pos, end_pos = find_coding_sequence_bounds(dna_seq_upper)
-    if start_pos is None:
-        return 0
-    
-    search_end = end_pos if end_pos is not None else len(dna_seq_upper) - 3
-    slippery_count = sum(1 for i in range(start_pos, search_end, 3) 
-                        if dna_seq_upper[i:i+4] in Slippery_Motifs and i+4 <= len(dna_seq_upper))
+    start_pos = 0
+    search_end = len(dna_seq_upper) - 4
+    slippery_count = 0
+    for i in range(start_pos, search_end, 3):
+        codon = dna_seq_upper[i:i+3]
+        next_base = dna_seq_upper[i+3] if i+3 < len(dna_seq_upper) else ''
+        if codon == 'TTT' and next_base in ('T', 'C'):
+            slippery_count += 1
     return slippery_count
+
+def get_slippery_motif_positions(dna_seq):
+    dna_seq_upper = dna_seq.upper().replace('U', 'T')
+    start_pos = 0
+    search_end = len(dna_seq_upper) - 4
+    slippery_positions = []
+    for i in range(start_pos, search_end, 3):
+        codon = dna_seq_upper[i:i+3]
+        next_base = dna_seq_upper[i+3] if i+3 < len(dna_seq_upper) else ''
+        if codon == 'TTT' and next_base in ('T', 'C'):
+            motif = codon + next_base
+            aa_position = ((i - start_pos) // 3) + 1
+            slippery_positions.append({
+                'motif': motif,
+                'nucleotide_position': i + 1,
+                'amino_acid_position': aa_position,
+                'codon_position': f"{i+1}-{i+4}"
+            })
+    return slippery_positions
+
+
+
 
 def number_of_plus1_stops(dna_seq):
     """Count stop codons in +1 frame across the entire sequence"""
@@ -4513,8 +4509,8 @@ def main():
                                             st.metric("Epitope Rate", f"{epitope_rate:.1f}%")
                                         
                                         if total_epitopes_found > 0:
-                                            st.warning(f"⚠️ **BATCH ALERT**: Found {total_epitopes_found} immunogenic peptides across {sequences_with_epitopes} sequences!")
-                                            
+                                            st.warning(f"⚠️ **What the Heck**: Found {total_epitopes_found} immunogenic peptides across {sequences_with_epitopes} sequences!")
+
                                             # Create batch epitope summary
                                             if batch_epitope_findings:
                                                 batch_epitope_df = pd.DataFrame(batch_epitope_findings)
