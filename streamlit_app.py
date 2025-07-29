@@ -31,7 +31,7 @@ from datetime import datetime
 
 # Configure page
 st.set_page_config(
-    page_title="Harmonized Optimization of Oligos and Frames",
+    page_title="HOOF",
     page_icon=":horse:",
     layout="wide",
     initial_sidebar_state="expanded"
