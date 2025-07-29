@@ -5192,7 +5192,7 @@ def main():
         
         protein_query = st.text_input(
             "Enter protein search (e.g., 'SARS-CoV-2 spike protein', 'human insulin'):",
-            placeholder="Full Name or Protein Makes me Work Better - Yummy",
+            placeholder="Full Name of Protein Makes me Work Better - Yummy",
             key="protein_search_query"
         )
         
