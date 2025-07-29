@@ -1,7 +1,8 @@
-#Add mouse codon usage table#Make it so i can 3' tag vaccines with a peptide if/+1
-
+# - [ ] Fix slippery sites per 100bp: its not showing the correct numbers - still doesnt work its just bp/slippery motifs
+# - No sorry make it so that the single sequence optimisation has the before and after optimisation graphs like in batch optimisation 
 
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -11,6 +12,7 @@ from plotly.subplots import make_subplots
 import os
 import json
 import logging
+import hashlib
 from collections import defaultdict, Counter
 from Bio.Seq import Seq
 from openpyxl import load_workbook
@@ -47,13 +49,13 @@ DEFAULT_CONFIG = {
     "default_output_dir": "."
 }
 
-# --- Theme Definitions ---
+# Add to the THEMES dictionary
 THEMES = {
     "Default": {
         "info": "Default color scheme with vibrant, high-contrast colors.",
         "colors": {
             "utr5": "#1900FF",
-            "cds": "#4ECDC4",
+            "cds": "#4ECDC4", 
             "utr3": "#FF6B6B",
             "signal_peptide": "#8A2BE2",
             "optimization": {'original': '#FF8A80', 'optimized': '#4ECDC4'},
@@ -84,9 +86,45 @@ THEMES = {
             "analysis": ['#F0AD4E', '#E57373', '#FF8A65', '#FFB74D', '#FFD54F', '#FFF176', '#DCE775', '#AED581'],
             "gradient": ['#FFF3E0', '#FFE0B2', '#FFCC80', '#FFB74D', '#FFA726', '#FF9800', '#FB8C00', '#F57C00']
         }
+    },
+    # ADD THESE NEW COLOR-BLIND FRIENDLY THEMES
+    "Colorblind Safe": {
+        "info": "High contrast colors optimized for colorblind users (deuteranopia/protanopia safe).",
+        "colors": {
+            "utr5": "#000000",      # Black
+            "cds": "#E69F00",       # Orange
+            "utr3": "#56B4E9",      # Sky Blue
+            "signal_peptide": "#009E73",  # Bluish Green
+            "optimization": {'original': '#CC79A7', 'optimized': '#E69F00'},  # Pink -> Orange
+            "analysis": ['#E69F00', '#56B4E9', '#009E73', '#F0E442', '#0072B2', '#D55E00', '#CC79A7', '#000000'],
+            "gradient": ['#FFF2CC', '#FFE699', '#FFD966', '#FFCC33', '#E69F00', '#CC8F00', '#B37F00', '#996F00']
+        }
+    },
+    "High Contrast": {
+        "info": "Maximum contrast theme for accessibility.",
+        "colors": {
+            "utr5": "#000000",      # Black
+            "cds": "#FFFFFF",       # White
+            "utr3": "#FF0000",      # Red
+            "signal_peptide": "#00FF00",  # Green
+            "optimization": {'original': '#FF0000', 'optimized': '#00FF00'},
+            "analysis": ['#000000', '#FFFFFF', '#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF'],
+            "gradient": ['#CCCCCC', '#AAAAAA', '#888888', '#666666', '#444444', '#222222', '#111111', '#000000']
+        }
+    },
+    "Viridis": {
+        "info": "Perceptually uniform colormap, excellent for colorblind users.",
+        "colors": {
+            "utr5": "#440154",      # Dark purple
+            "cds": "#31688E",       # Blue
+            "utr3": "#35B779",      # Green
+            "signal_peptide": "#FDE725",  # Yellow
+            "optimization": {'original': '#440154', 'optimized': '#35B779'},
+            "analysis": ['#440154', '#482777', '#3F4A8A', '#31688E', '#26838F', '#1F9D8A', '#6CCE5A', '#B6DE2B'],
+            "gradient": ['#440154', '#482777', '#3F4A8A', '#31688E', '#26838F', '#1F9D8A', '#6CCE5A', '#B6DE2B']
+        }
     }
 }
-
 # --- App Theme CSS --- (for styling the Streamlit UI itself)
 APP_THEMES_CSS = {
     "Default": "",  # No custom CSS for the default theme
@@ -148,6 +186,7 @@ if 'human_codon_usage' not in st.session_state:
     st.session_state.human_codon_usage = {}
 if 'aa_to_codons' not in st.session_state:
     st.session_state.aa_to_codons = defaultdict(list)
+
 # Database search results caching
 if 'cached_search_results' not in st.session_state:
     st.session_state.cached_search_results = None
@@ -311,8 +350,8 @@ def display_copyable_sequence(sequence, label, key_suffix=""):
         help="Click in the text area and use Ctrl+A to select all, then Ctrl+C to copy"
     )
 
-def display_colored_mrna_sequence(utr5_seq, cds_seq, utr3_seq, signal_peptide_seq="", key_suffix=""):
-    """Display mRNA sequence with 5'UTR, CDS, and 3'UTR highlighted in different colors."""
+def display_colored_mrna_sequence(utr5_seq, cds_seq, utr3_seq, signal_peptide_seq="", tag_sequence_seq="", key_suffix=""):
+    """Display mRNA sequence with 5'UTR, CDS, 3'UTR, signal peptide, and optional tag highlighted in different colors."""
     st.subheader("Full mRNA Sequence (Colored)")
 
     # Define colors for each section from the active theme
@@ -321,26 +360,41 @@ def display_colored_mrna_sequence(utr5_seq, cds_seq, utr3_seq, signal_peptide_se
     color_cds = theme_colors["cds"]
     color_utr3 = theme_colors["utr3"]
     color_signal_peptide = theme_colors["signal_peptide"]
+    color_tag = "#FFA500"  # Orange color for tags
 
     # Create HTML string with colored spans
+    colored_parts = []
+    full_sequence_parts = []
+    
+    if utr5_seq:
+        colored_parts.append(f'<span style="color: {color_utr5}; font-weight: bold;">{utr5_seq}</span>')
+        full_sequence_parts.append(utr5_seq)
+    
     if signal_peptide_seq:
-        colored_html = f"""
-        <div style="font-family: monospace; white-space: pre-wrap; word-break: break-all; background-color: #f0f2f6; padding: 10px; border-radius: 5px; font-size: 0.8em;">
-            <span style="color: {color_utr5}; font-weight: bold;">{utr5_seq}</span><span style="color: {color_signal_peptide}; font-weight: bold;">{signal_peptide_seq}</span><span style="color: {color_cds}; font-weight: bold;">{cds_seq}</span><span style="color: {color_utr3}; font-weight: bold;">{utr3_seq}</span>
-        </div>
-        """
-        full_sequence = utr5_seq + signal_peptide_seq + cds_seq + utr3_seq
-    else:
-        colored_html = f"""
-        <div style="font-family: monospace; white-space: pre-wrap; word-break: break-all; background-color: #f0f2f6; padding: 10px; border-radius: 5px; font-size: 0.8em;">
-            <span style="color: {color_utr5}; font-weight: bold;">{utr5_seq}</span><span style="color: {color_cds}; font-weight: bold;">{cds_seq}</span><span style="color: {color_utr3}; font-weight: bold;">{utr3_seq}</span>
-        </div>
-        """
-        full_sequence = utr5_seq + cds_seq + utr3_seq
+        colored_parts.append(f'<span style="color: {color_signal_peptide}; font-weight: bold;">{signal_peptide_seq}</span>')
+        full_sequence_parts.append(signal_peptide_seq)
+    
+    if cds_seq:
+        colored_parts.append(f'<span style="color: {color_cds}; font-weight: bold;">{cds_seq}</span>')
+        full_sequence_parts.append(cds_seq)
+    
+    if tag_sequence_seq:
+        colored_parts.append(f'<span style="color: {color_tag}; font-weight: bold;">{tag_sequence_seq}</span>')
+        full_sequence_parts.append(tag_sequence_seq)
+    
+    if utr3_seq:
+        colored_parts.append(f'<span style="color: {color_utr3}; font-weight: bold;">{utr3_seq}</span>')
+        full_sequence_parts.append(utr3_seq)
+
+    colored_html = f"""
+    <div style="font-family: monospace; white-space: pre-wrap; word-break: break-all; background-color: #f0f2f6; padding: 10px; border-radius: 5px; font-size: 0.8em;">
+        {''.join(colored_parts)}
+    </div>
+    """
     st.markdown(colored_html, unsafe_allow_html=True)
 
     # Also provide a copyable text area for the full sequence
-    full_sequence = utr5_seq + cds_seq + utr3_seq
+    full_sequence = ''.join(full_sequence_parts)
     st.text_area(
         "Copy Full mRNA Sequence:",
         full_sequence,
@@ -348,34 +402,48 @@ def display_colored_mrna_sequence(utr5_seq, cds_seq, utr3_seq, signal_peptide_se
         key=f"copy_full_mrna_{key_suffix}",
         help="Click in the text area and use Ctrl+A to select all, then Ctrl+C to copy"
     )
+    
     # Update legend
+    legend_items = []
+    if utr5_seq:
+        legend_items.append(f'<span style="color: {color_utr5};">■</span> 5\' UTR ({len(utr5_seq)} bp)')
+    if signal_peptide_seq:
+        legend_items.append(f'<span style="color: {color_signal_peptide};">■</span> Signal Peptide ({len(signal_peptide_seq)} bp)')
+    if cds_seq:
+        legend_items.append(f'<span style="color: {color_cds};">■</span> CDS ({len(cds_seq)} bp)')
+    if tag_sequence_seq:
+        legend_items.append(f'<span style="color: {color_tag};">■</span> 3\' Tag ({len(tag_sequence_seq)} bp)')
+    if utr3_seq:
+        legend_items.append(f'<span style="color: {color_utr3};">■</span> 3\' UTR ({len(utr3_seq)} bp)')
+    
     legend_html = f"""
     <div style="font-size: 0.8em; color: gray;">
-        <span style="color: {color_utr5};">■</span> 5' UTR ({len(utr5_seq)} bp) &nbsp;&nbsp;
-    """
-    if signal_peptide_seq:
-        legend_html += f"""<span style="color: {color_signal_peptide};">■</span> Signal Peptide ({len(signal_peptide_seq)} bp) &nbsp;&nbsp;"""
-    
-    legend_html += f"""
+        {' &nbsp;&nbsp; '.join(legend_items)}
     </div>
     """
     st.markdown(legend_html, unsafe_allow_html=True)
     
     
-def create_geneious_like_visualization(utr5_seq, cds_seq, utr3_seq, signal_peptide_seq="", key_suffix=""):
+def create_geneious_like_visualization(utr5_seq, cds_seq, utr3_seq, signal_peptide_seq="", tag_sequence_seq="", double_stop_codon="TAATAA", key_suffix=""):
     """
     Create a Geneious-like visualization of the mRNA sequence with nucleotides and amino acids.
-    Amino acids are only shown for the coding sequence (signal peptide + CDS).
+    Amino acids are only shown for the coding sequence (signal peptide + CDS + tag).
     """
-    
+    # Process the sequences to handle the stop codon correctly
+    processed_cds = cds_seq.strip()
+    processed_tag = tag_sequence_seq.strip()
+    stop_codons = {"TAA", "TAG", "TGA"}
+
+    # Remove existing stop codons from the tag or CDS
+    if processed_tag:
+        while len(processed_tag) >= 3 and processed_tag[-3:].upper() in stop_codons:
+            processed_tag = processed_tag[:-3]
+    else:
+        while len(processed_cds) >= 3 and processed_cds[-3:].upper() in stop_codons:
+            processed_cds = processed_cds[:-3]
+
     # Generate a unique suffix based on key_suffix and a random value
     unique_id = f"{key_suffix}_{id(utr5_seq)}"
-    
-   
-    
-    
-    # Create the detailed visualization
-    
     
     # Get theme colors
     theme_colors = THEMES[st.session_state.active_theme]["colors"]
@@ -383,6 +451,7 @@ def create_geneious_like_visualization(utr5_seq, cds_seq, utr3_seq, signal_pepti
     color_cds = theme_colors["cds"]
     color_utr3 = theme_colors["utr3"]
     color_signal_peptide = theme_colors["signal_peptide"]
+    color_tag = theme_colors.get("tag", "#FFA500")  # Use theme color or fallback
     
     # Create the visualization sections
     sections = []
@@ -406,13 +475,30 @@ def create_geneious_like_visualization(utr5_seq, cds_seq, utr3_seq, signal_pepti
         })
     
     # CDS Section
-    if cds_seq:
+    if processed_cds:
         sections.append({
             'name': "CDS",
-            'sequence': cds_seq,
+            'sequence': processed_cds,
             'color': color_cds,
             'show_aa': True
         })
+    
+    # 3' Tag Section (NEW)
+    if processed_tag:
+        sections.append({
+            'name': "3' Tag",
+            'sequence': processed_tag,
+            'color': color_tag,
+            'show_aa': True
+        })
+
+    # Stop Codon Section
+    sections.append({
+        'name': "Stop Codon",
+        'sequence': double_stop_codon,
+        'color': color_cds,  # Same color as CDS for now
+        'show_aa': True
+    })
     
     # 3' UTR Section
     if utr3_seq:
@@ -467,7 +553,6 @@ def create_geneious_like_visualization(utr5_seq, cds_seq, utr3_seq, signal_pepti
                 if remaining:
                     codons.append(remaining + " " * (3 - len(remaining)))  # Pad with spaces
                     amino_acids.append(" ")  # Space for incomplete codon
-                
                 
                 # Create spaced codon display
                 spaced_codons = "   ".join(codons)  # 3 spaces between codons
@@ -551,8 +636,8 @@ def create_geneious_like_visualization(utr5_seq, cds_seq, utr3_seq, signal_pepti
     # Add summary information
     st.markdown("### Sequence Summary")
     
-    total_length = len(utr5_seq) + len(signal_peptide_seq) + len(cds_seq) + len(utr3_seq)
-    coding_length = len(signal_peptide_seq) + len(cds_seq)
+    total_length = len(utr5_seq) + len(signal_peptide_seq) + len(processed_cds) + len(processed_tag) + len(double_stop_codon) + len(utr3_seq)
+    coding_length = len(signal_peptide_seq) + len(processed_cds) + len(processed_tag) + len(double_stop_codon)
     
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -566,7 +651,7 @@ def create_geneious_like_visualization(utr5_seq, cds_seq, utr3_seq, signal_pepti
         else:
             st.metric("Protein Length", "0 aa")
     with col4:
-        full_seq = utr5_seq + signal_peptide_seq + cds_seq + utr3_seq
+        full_seq = utr5_seq + signal_peptide_seq + processed_cds + processed_tag + double_stop_codon + utr3_seq
         gc_content = calculate_gc_content(full_seq) if full_seq else 0
         st.metric("GC Content", f"{gc_content:.1f}%")
     
@@ -578,8 +663,11 @@ def create_geneious_like_visualization(utr5_seq, cds_seq, utr3_seq, signal_pepti
         legend_items.append(f'<span style="color: {color_utr5}; font-weight: bold;">■</span> 5\' UTR')
     if signal_peptide_seq:
         legend_items.append(f'<span style="color: {color_signal_peptide}; font-weight: bold;">■</span> Signal Peptide')
-    if cds_seq:
+    if processed_cds:
         legend_items.append(f'<span style="color: {color_cds}; font-weight: bold;">■</span> CDS')
+    if processed_tag:
+        legend_items.append(f'<span style="color: {color_tag}; font-weight: bold;">■</span> 3\' Tag')
+    legend_items.append(f'<span style="color: {color_cds}; font-weight: bold;">■</span> Stop Codon')
     if utr3_seq:
         legend_items.append(f'<span style="color: {color_utr3}; font-weight: bold;">■</span> 3\' UTR')
     
@@ -592,6 +680,8 @@ def create_geneious_like_visualization(utr5_seq, cds_seq, utr3_seq, signal_pepti
     
     # Add explanation
     st.info("💡 **Reading Guide**: In coding regions, nucleotides are grouped by codons (3 letters) with the corresponding amino acid shown below each codon.")
+
+
 
 def find_coding_sequence_bounds(dna_seq):
     """Find start and stop positions of coding sequence, prioritizing ACCATG."""
@@ -858,8 +948,162 @@ def create_interactive_stacked_bar_chart(x_data, y_data_dict, title, y_title):
     
     return fig
 
+def create_interactive_cai_gc_overlay_plot(
+    positions, cai_weights, amino_acids, sequence, seq_name,
+    plus1_stop_positions=None, minus1_stop_positions=None, slippery_positions=None,
+    show_options=None,  # Parameter ignored for compatibility
+    color='#4ECDC4'
+):
+    """Create interactive plot with a clickable legend to toggle overlays."""
+    from plotly.subplots import make_subplots
+    import plotly.graph_objects as go
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    # CAI weights (Visible by default)
+    fig.add_trace(
+        go.Scatter(
+            x=positions,
+            y=cai_weights,
+            mode='lines+markers',
+            name='CAI Weight',
+            line=dict(color=color, width=2),
+            marker=dict(size=4),
+            hovertemplate='<b>Position:</b> %{x}<br><b>CAI Weight:</b> %{y:.3f}<br><b>AA:</b> %{customdata}<extra></extra>',
+            customdata=amino_acids,
+            visible=True
+        ),
+        secondary_y=False,
+    )
+
+    # GC content (Visible by default)
+    gc_content_25bp = [calculate_gc_window(sequence, pos, 25) for pos in positions]
+    fig.add_trace(
+        go.Scatter(
+            x=positions,
+            y=gc_content_25bp,
+            mode='lines',
+            name='25bp GC Content',
+            line=dict(color='#888', width=2, dash='dot'),
+            hovertemplate='<b>Position:</b> %{x}<br><b>25bp GC Content:</b> %{y:.1f}%<extra></extra>',
+            opacity=0.7,
+            visible=True
+        ),
+        secondary_y=True,
+    )
+
+    # +1 stops (Hidden by default, toggled via legend)
+    if plus1_stop_positions:
+        fig.add_trace(
+            go.Bar(
+                x=plus1_stop_positions,
+                y=[100] * len(plus1_stop_positions), # Use 100 to match the GC axis
+                name='+1 Stops',
+                marker_color='#FF6B6B',
+                opacity=0.6,
+                width=0.8,
+                hovertemplate='<b>Position:</b> %{x}<br>+1 Stop Codon<extra></extra>',
+                visible='legendonly'
+            ),
+            secondary_y=True,
+        )
+
+    # -1 stops (Hidden by default, toggled via legend)
+    if minus1_stop_positions:
+        fig.add_trace(
+            go.Bar(
+                x=minus1_stop_positions,
+                y=[100] * len(minus1_stop_positions), # Use 100 to match the GC axis
+                name='-1 Stops',
+                marker_color='#4ECDC4',
+                opacity=0.6,
+                width=0.8,
+                hovertemplate='<b>Position:</b> %{x}<br>-1 Stop Codon<extra></extra>',
+                visible='legendonly'
+            ),
+            secondary_y=True,
+        )
+
+    # Slippery sites (Hidden by default, toggled via legend)
+    if slippery_positions:
+        slippery_aa_positions = [pos['amino_acid_position'] for pos in slippery_positions]
+        slippery_motifs = [pos['motif'] for pos in slippery_positions]
+        fig.add_trace(
+            go.Bar(
+                x=slippery_aa_positions,
+                y=[100] * len(slippery_aa_positions), # Use 100 to match the GC axis
+                name='Slippery Sites',
+                marker_color='#FFD700',
+                opacity=0.6,
+                width=0.8,
+                hovertemplate='<b>Position:</b> %{x}<br>Motif: %{customdata}<extra></extra>',
+                customdata=slippery_motifs,
+                visible='legendonly'
+            ),
+            secondary_y=True,
+        )
+
+    fig.update_xaxes(
+        title_text="Amino Acid Position",
+        range=[1, len(amino_acids) + 1],  # Ensure x-axis starts at 1 and covers all positions
+        fixedrange=True  # Prevent zooming out beyond data limits
+    )
+
+    # Primary Y-axis for CAI
+    fig.update_yaxes(title_text="CAI Weight", secondary_y=False, range=[0, 1])
+
+    # Secondary Y-axis for GC Content and event markers
+    fig.update_yaxes(
+        title_text="GC Content (%) / Events", 
+        secondary_y=True, 
+        range=[0, 100],
+        showticklabels=True
+    )
+
+    fig.update_layout(
+        title=f'CAI/GC/Stop/Slippery Chart - {seq_name}',
+        height=500,
+        hovermode='x unified',
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1,
+            traceorder="normal"
+        ),
+        margin=dict(t=100, b=50, l=50, r=50)
+    )
+
+    return fig
+
+    
 
 
+def display_stateful_overlay_chart(positions, cai_weights, amino_acids, sequence, seq_name, plus1_stop_positions, minus1_stop_positions, slippery_positions):
+    """Renders the chart as a self-contained HTML component to prevent Streamlit reruns."""
+
+    st.info("💡 **Interactive Chart**: Click on legend items (e.g., '+1 Stops') to toggle their visibility on the chart.")
+
+    # 1. Create the Plotly figure object as before.
+    overlay_fig = create_interactive_cai_gc_overlay_plot(
+        positions=positions,
+        cai_weights=cai_weights,
+        amino_acids=amino_acids,
+        sequence=sequence,
+        seq_name=seq_name,
+        plus1_stop_positions=plus1_stop_positions,
+        minus1_stop_positions=minus1_stop_positions,
+        slippery_positions=slippery_positions
+    )
+
+    # 2. Convert the figure to a self-contained HTML block.
+    # This packages all the necessary JavaScript and data into one string.
+    chart_html = overlay_fig.to_html(full_html=False, include_plotlyjs='cdn')
+
+    # 3. Render the HTML using st.components.v1.html.
+    # This creates a sandboxed iframe, isolating the chart's state from Streamlit.
+    components.html(chart_html, height=550, scrolling=True)
 
 
 
@@ -924,7 +1168,7 @@ def create_interactive_cai_slippery_plot(positions, cai_weights, amino_acids, sl
         ),
         margin=dict(t=50, b=50, l=50, r=50)
     )
-    
+
     return fig
 
 def create_enhanced_chart(data, chart_type, title, colors=None, xlabel="Sequence", ylabel="Value"):
@@ -1000,24 +1244,30 @@ def calculate_enhanced_summary_stats(result, original_seq=""):
     
     return stats
 
+
 def count_specific_slippery_motifs(dna_seq):
-    """Count slippery motifs (TTTT and TTTC) in coding frame (frame 0) as TTT + T/C"""
+    """Count in-frame slippery motifs (TTTT and TTTC at codon boundaries)"""
     dna_seq_upper = dna_seq.upper().replace('U', 'T')
-    start_pos, end_pos = find_coding_sequence_bounds(dna_seq_upper)
-    counts = {'TTTT': 0, 'TTTC': 0, 'total': 0}
-    if start_pos is None:
-        return counts
-    search_end = end_pos if end_pos is not None else len(dna_seq_upper) - 4
-    for i in range(start_pos, search_end, 3):
-        codon = dna_seq_upper[i:i+3]
-        next_base = dna_seq_upper[i+3] if i+3 < len(dna_seq_upper) else ''
-        if codon == 'TTT':
-            if next_base == 'T':
-                counts['TTTT'] += 1
-            elif next_base == 'C':
-                counts['TTTC'] += 1
+    counts = {'TTTT': 0, 'TTTC': 0}
+    for i in range(0, len(dna_seq_upper) - 3, 3):
+        motif = dna_seq_upper[i:i+4]
+        if motif == 'TTTT':
+            counts['TTTT'] += 1
+        elif motif == 'TTTC':
+            counts['TTTC'] += 1
     counts['total'] = counts['TTTT'] + counts['TTTC']
     return counts
+
+def calculate_slippery_motifs_per_100bp(dna_seq):
+    """Calculate in-frame slippery motifs per 100bp"""
+    sequence_length = len(dna_seq.replace(' ', '').replace('\n', ''))
+    if sequence_length == 0:
+        return {'TTTT': 0.0, 'TTTC': 0.0}
+    slippery_counts = count_specific_slippery_motifs(dna_seq)
+    return {
+        'TTTT': (slippery_counts['TTTT'] / sequence_length) * 100,
+        'TTTC': (slippery_counts['TTTC'] / sequence_length) * 100,
+    }
 
 def validate_dna_sequence(sequence):
     """Validate DNA sequence and return cleaned version"""
@@ -3694,24 +3944,29 @@ def main():
                         
                         # Create interactive In-Frame graph with GC content
                         if not df.empty and 'CAI_Weight' in df.columns:
-                            st.subheader("📊 Interactive CAI Weights and 10bp GC Content")
+                            st.subheader("📊 Interactive CAI/GC/Stop/Slippery Chart")
                             
                             positions = df['Position'].tolist()
                             cai_weights = df['CAI_Weight'].tolist()
                             amino_acids = df['Amino_Acid'].tolist()
-                            
-                            # Create interactive plot
+                            plus1_stop_positions = get_plus1_stop_positions(sequence_input)
+                            minus1_stop_positions = get_minus1_stop_positions(sequence_input)
+                            slippery_positions = get_slippery_motif_positions(sequence_input)
                             colors = get_consistent_color_palette(1, "optimization")
-                            fig = create_interactive_cai_gc_plot(
-                                positions, 
-                                cai_weights, 
-                                amino_acids, 
-                                sequence_input, 
+                            fig = create_interactive_cai_gc_overlay_plot(
+                                positions,
+                                cai_weights,
+                                amino_acids,
+                                sequence_input,
                                 f"Sequence ({len(sequence_input)} bp)",
-                                colors['optimized']
+                                plus1_stop_positions=plus1_stop_positions,
+                                minus1_stop_positions=minus1_stop_positions,
+                                slippery_positions=slippery_positions,
+                                
+                                color=colors['optimized']
                             )
+                            st.plotly_chart(fig, use_container_width=True)
                             
-                            st.plotly_chart(fig, use_container_width=True, key="single_in_frame_cai_gc_plot")
                             
                             st.subheader("📊 Summary Statistics")
                             # Calculate enhanced summary stats
@@ -3721,7 +3976,7 @@ def main():
                             average_cai = np.mean(df['CAI_Weight']) if 'CAI_Weight' in df else 0
                             slippery_motifs = number_of_slippery_motifs(sequence_input)
 
-                            col_sum1, col_sum2, col_sum3, col_sum4 = st.columns(4)
+                            col_sum1, col_sum2, col_sum3, col_sum4, col_sum5 = st.columns(5)
                             with col_sum1:
                                 st.metric("Sequence Length", f"{sequence_length} bp")
                             with col_sum2:
@@ -3730,12 +3985,8 @@ def main():
                                 st.metric("GC Content", f"{gc_content:.1f}%")
                             with col_sum4:
                                 st.metric("Average CAI", f"{average_cai:.3f}")
-
-                            st.metric("Slippery Motifs", slippery_motifs)
-
-                            with st.expander("View Detailed In-Frame Data"):
-                                st.dataframe(df, use_container_width=True)
-                                
+                            with col_sum5:
+                                st.metric("Slippery Motifs", slippery_motifs)
                         # Slippery motif locations
                         st.subheader("📍 Slippery Motif Locations")
                         slippery_positions = get_slippery_motif_positions(sequence_input)
@@ -4016,7 +4267,7 @@ def main():
 
                         # Stops and Slippery Motifs per 100bp
                         with st.expander("📊 Stops and Slippery Motifs per 100bp", expanded=False):
-                            sequence_length = len(optimized_seq)
+                            sequence_length = len(optimized_seq.replace('\n', '').replace(' ', ''))                            
                             plus1_stops = number_of_plus1_stops(optimized_seq)
                             stops_per_100bp = {
                                 'TAA': [(plus1_stops['TAA'] / sequence_length) * 100 if sequence_length > 0 else 0],
@@ -4031,11 +4282,13 @@ def main():
                             )
                             st.plotly_chart(stops_fig, use_container_width=True, key="single_stops_per_100bp_opt")
 
-                            slippery_breakdown = count_specific_slippery_motifs(optimized_seq)
+                            sequence_length = len(optimized_seq.replace('\n', '').replace(' ', ''))
+                            slippery_counts = count_specific_slippery_motifs(optimized_seq)
                             slippery_per_100bp = {
-                                'TTTT': [(slippery_breakdown['TTTT'] / sequence_length) * 100 if sequence_length > 0 else 0],
-                                'TTTC': [(slippery_breakdown['TTTC'] / sequence_length) * 100 if sequence_length > 0 else 0],
+                                'TTTT': [ (slippery_counts['TTTT'] / sequence_length) * 100 if sequence_length > 0 else 0 ],
+                                'TTTC': [ (slippery_counts['TTTC'] / sequence_length) * 100 if sequence_length > 0 else 0 ],
                             }
+
                             slippery_fig = create_interactive_stacked_bar_chart(
                                 ['Optimized Sequence'],
                                 slippery_per_100bp,
@@ -5923,6 +6176,87 @@ def main():
             key="mrna_design_stop_codon"
         )
 
+        # ADD THIS ENTIRE SECTION HERE - RIGHT AFTER STOP CODON SELECTION:
+        st.markdown("**3' Peptide Tag (Optional)**")
+        add_3prime_tag = st.checkbox("Add 3' peptide tag to mRNA", key="add_3prime_tag")
+
+        if add_3prime_tag:
+            TAG_PEPTIDES = {
+                "His-Tag (6x)": {
+                    "sequence_aa": "HHHHHH",
+                    "purpose": "Protein purification and detection"
+                },
+                "His-Tag (8x)": {
+                    "sequence_aa": "HHHHHHHH", 
+                    "purpose": "Enhanced protein purification"
+                },
+                "FLAG Tag": {
+                    "sequence_aa": "DYKDDDDK",
+                    "purpose": "Protein detection and purification"
+                },
+                "V5 Tag": {
+                    "sequence_aa": "GKPIPNPLLGLDST",
+                    "purpose": "Protein detection and immunoprecipitation"
+                },
+                "Myc Tag": {
+                    "sequence_aa": "EQKLISEEDL", 
+                    "purpose": "Protein detection and localization"
+                },
+                "HA Tag": {
+                    "sequence_aa": "YPYDVPDYA",
+                    "purpose": "Protein detection and purification"
+                },
+                "Strep-Tag II": {
+                    "sequence_aa": "WSHPQFEK",
+                    "purpose": "Gentle protein purification"
+                },
+                "Custom Peptide": {
+                    "sequence_aa": "",
+                    "purpose": "User-defined peptide sequence"
+                }
+            }
+            
+            selected_tag_name = st.selectbox(
+                "Select 3' peptide tag:",
+                list(TAG_PEPTIDES.keys()),
+                key="tag_selection"
+            )
+            
+            selected_tag_info = TAG_PEPTIDES[selected_tag_name]
+            
+            if selected_tag_name == "Custom Peptide":
+                custom_tag_sequence = st.text_area(
+                    "Enter custom peptide sequence (amino acids):",
+                    placeholder="EXAMPLE",
+                    key="custom_tag_sequence"
+                )
+                tag_sequence_aa = custom_tag_sequence.strip().upper()
+            else:
+                tag_sequence_aa = selected_tag_info["sequence_aa"]
+                st.info(f"**Purpose:** {selected_tag_info['purpose']}\n\n**Amino Acid Sequence:** {tag_sequence_aa}")
+            
+            # Tag linker options
+            use_tag_linker = st.checkbox("Add linker before 3' tag", value=False, key="use_tag_linker")
+            
+            if use_tag_linker:
+                tag_linker_options = {
+                    "Flexible (GGGGS)": "GGGGS",
+                    "Flexible (GGS)": "GGS", 
+                    "Rigid (EAAAK)": "EAAAK",
+                    "Short (GG)": "GG"
+                }
+                
+                selected_tag_linker = st.selectbox(
+                    "Select tag linker:",
+                    list(tag_linker_options.keys()),
+                    key="tag_linker_selection"
+                )
+                
+                tag_linker_aa = tag_linker_options[selected_tag_linker]
+            else:
+                tag_linker_aa = ""
+
+
         st.subheader("3. Design mRNA")
         if st.button("Design mRNA Sequence", type="primary"):
             if not cds_sequence.strip():
@@ -5960,6 +6294,7 @@ def main():
                                 processed_cds = JT_Plus1_Stop_Optimized(processed_cds)
                             st.success(f"Successfully applied {optimization_method_mrna}.")
 
+                # In the "Design mRNA Sequence" button logic, after assembling the main CDS:
                     # Step 3: Assemble the full CDS, handling the signal peptide correctly
                     dna_signal_peptide = ""
                     main_cds = processed_cds
@@ -5969,39 +6304,68 @@ def main():
                         selected_sp_aa_seq = selected_sp_info["sequence_aa"]
                         dna_signal_peptide = reverse_translate_highest_cai(selected_sp_aa_seq)
                         
-                        # IMPORTANT: Remove the ATG from the main CDS only if a signal peptide is added
+                        # Remove the ATG from the main CDS only if a signal peptide is added
                         if main_cds.upper().startswith("ATG"):
                             main_cds = main_cds[3:]
                             st.info("Removed ATG start codon from main CDS because a signal peptide was added.")
-                    
-                    # The full coding sequence is the signal peptide followed by the main CDS
-                    full_cds = dna_signal_peptide + main_cds
-                    
-                    # Add stop codons to the end of the full coding sequence
+
+                    # Step 3.5: Add 3' peptide tag if selected
+                    tag_sequence_dna = ""
+                    if add_3prime_tag and tag_sequence_aa:
+                        if use_tag_linker and tag_linker_aa:
+                            full_tag_aa = tag_linker_aa + tag_sequence_aa
+                        else:
+                            full_tag_aa = tag_sequence_aa
+                        
+                        # Reverse translate the tag
+                        tag_sequence_dna = reverse_translate_highest_cai(full_tag_aa)
+                        st.info(f"Added 3' peptide tag: {full_tag_aa}")
+
+                    # The full coding sequence is: signal peptide + main CDS + 3' tag
+                    full_cds = dna_signal_peptide + main_cds + tag_sequence_dna
+
+                    # Step 4: Handle stop codons
                     STANDARD_STOP_CODONS = {"TAA", "TAG", "TGA"}
-                    last_codon = full_cds[-3:].upper() if len(full_cds) >= 3 else ""
+                    last_codon = full_cds[-3:].upper()
+
                     if last_codon in STANDARD_STOP_CODONS:
-                        # If the sequence already ends in a stop, replace it with the selected double stop
+                        # If there's already a stop codon, replace it with the selected double stop
                         cds_with_stops = full_cds[:-3] + (selected_stop_codon * 2)
+                        st.info(f"Replaced existing stop codon with selected double stop codon: {selected_stop_codon * 2}")
                     else:
-                        # Otherwise, append the double stop codon
+                        # If there's no stop codon, append the selected double stop
                         cds_with_stops = full_cds + (selected_stop_codon * 2)
+                        st.info(f"Added selected double stop codon: {selected_stop_codon * 2}")
+
+                    # Step 5: Assemble and display the final mRNA sequence
+                    final_mrna_sequence = JT_5_UTR + cds_with_stops + JT_3_UTR
+                    st.subheader("✅ Final mRNA Sequence")
+
+                    # For display, we pass the components separately to be colored correctly
+                    main_cds_for_display = main_cds  # Just the main CDS without signal peptide and tag
+                    tag_for_display = tag_sequence_dna + (selected_stop_codon * 2)  # Include stop codons with tag
+
+                    display_colored_mrna_sequence(
+                        utr5_seq=JT_5_UTR, 
+                        cds_seq=main_cds_for_display,
+                        utr3_seq=JT_3_UTR, 
+                        signal_peptide_seq=dna_signal_peptide, 
+                        tag_sequence_seq=tag_for_display,  # Now includes the stop codons
+                        key_suffix="final_mrna"
+                    )
 
                     # Step 4: Assemble and display the final mRNA sequence
                     final_mrna_sequence = JT_5_UTR + cds_with_stops + JT_3_UTR
                     st.subheader("✅ Final mRNA Sequence")
                     
                     # For display, we pass the components separately to be colored correctly
-                    # The main CDS for display is the full CDS with stops, minus the signal peptide part
-                    main_cds_for_display = cds_with_stops[len(dna_signal_peptide):]
                     
-                    display_colored_mrna_sequence(
-                        utr5_seq=JT_5_UTR, 
-                        cds_seq=main_cds_for_display,
-                        utr3_seq=JT_3_UTR, 
-                        signal_peptide_seq=dna_signal_peptide, 
-                        key_suffix="final_mrna"
-                    )
+                    # For display, we need to separate the components
+                    main_cds_for_display = main_cds  # Just the main CDS
+                    
+                  
+       
+
 
                     # Step 5: Perform and display the final analysis
                     st.subheader("📊 Final Analysis")
@@ -6111,9 +6475,12 @@ def main():
                         utr5_seq=JT_5_UTR, 
                         cds_seq=main_cds_for_display,
                         utr3_seq=JT_3_UTR, 
-                        signal_peptide_seq=dna_signal_peptide, 
+                        signal_peptide_seq=dna_signal_peptide,
+                        tag_sequence_seq=tag_sequence_dna,  # ADD THIS LINE
                         key_suffix="final_mrna"
                     )
+                    
+             
 
                             
     with tab7:
@@ -6266,6 +6633,8 @@ def main():
                 STOP_CODONS,
                 key="cancer_stop_codon"
             )
+            
+            
             
             # Step 7: Design Vaccine Button
             st.subheader("3. Design Cancer Vaccine")
@@ -6539,6 +6908,10 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
+    #Make it so all CAI graphs have the option to overlay +1,-1 and slippery sites
+    #Make it properly colourblind friendly - not all colours are safe 
+    
 
     
     
