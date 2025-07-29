@@ -1932,219 +1932,7 @@ def JT_Plus1_Stop_Optimized(seq_input):
     out_seq += seq[idx:]
     return out_seq
 
-class PatentSearchEngine:
-    def __init__(self):
-        self.serper_api_key = os.getenv('SERPER_API_KEY')
-        self.anthropic_api_key = os.getenv('ANTHROPIC_API')
-        self.anthropic = Anthropic(api_key=self.anthropic_api_key) if self.anthropic_api_key else None
-    
-    def search_patents(self, query: str, num_results: int = 10) -> List[Dict]:
-        """Search Google Patents using SERPER API"""
-        if not self.serper_api_key:
-            st.error("SERPER API key is not configured. Please check your .env file.")
-            return []
-        
-        url = "https://google.serper.dev/search"
-        patent_query = f"site:patents.google.com {query}"
-        
-        payload = {"q": patent_query, "num": num_results}
-        headers = {'X-API-KEY': self.serper_api_key, 'Content-Type': 'application/json'}
-        
-        try:
-            response = requests.post(url, json=payload, headers=headers, timeout=30)
-            
-            if response.status_code == 403:
-                st.error("SERPER API Key is invalid or doesn't have permission")
-                return []
-            elif response.status_code != 200:
-                st.error(f"API Error: {response.status_code} - {response.text}")
-                return []
-            
-            results = response.json().get('organic', [])
-            return results
-            
-        except requests.exceptions.ConnectionError as e:
-            st.error(f"Connection error: Unable to reach SERPER API. Please check your internet connection.")
-            st.info("Troubleshooting tips:\n- Check your internet connection\n- Try again in a few moments\n- Verify your network allows HTTPS requests")
-            return []
-        except requests.exceptions.Timeout as e:
-            st.error("Request timeout: SERPER API took too long to respond. Please try again.")
-            return []
-        except requests.exceptions.RequestException as e:
-            st.error(f"Network error searching patents: {str(e)}")
-            st.info("This may be a temporary network issue. Please try again in a few moments.")
-            return []
-    
-    def extract_patent_info(self, search_results: List[Dict]) -> List[Dict]:
-        """Extract relevant patent information from search results"""
-        patents = []
-        for result in search_results:
-            patent_info = {
-                'title': result.get('title', ''),
-                'link': result.get('link', ''),
-                'snippet': result.get('snippet', ''),
-                'patent_id': self.extract_patent_id(result.get('link', ''))
-            }
-            patents.append(patent_info)
-        return patents
-    
-    def extract_patent_id(self, url: str) -> str:
-        """Extract patent ID from Google Patents URL"""
-        try:
-            if 'patents.google.com/patent/' in url:
-                return url.split('/patent/')[1].split('/')[0].split('?')[0]
-            return ""
-        except:
-            return ""
-    
-    def extract_mrna_sequences_from_patents(self, patents: List[Dict]) -> List[Dict]:
-        """Extract potential mRNA/nucleotide sequences from patent information"""
-        sequence_findings = []
-        
-        for patent in patents:
-            findings = {
-                'patent_id': patent['patent_id'],
-                'title': patent['title'],
-                'link': patent['link'],
-                'sequences_found': [],
-                'mrna_indicators': [],
-                'confidence_score': 0
-            }
-            
-            # Combine title and snippet for analysis
-            text_content = f"{patent['title']} {patent['snippet']}"
-            
-            # Look for ACCATG sequences (5' UTR + start codon)
-            accatg_matches = re.finditer(r'ACCATG[ATGC]{20,}', text_content.upper())
-            for match in accatg_matches:
-                seq = match.group()
-                findings['sequences_found'].append({
-                    'type': 'ACCATG_sequence',
-                    'sequence': seq,
-                    'length': len(seq),
-                    'confidence': 'high'
-                })
-                findings['confidence_score'] += 3
-            
-            # Look for other long nucleotide sequences
-            long_seq_pattern = r'[ATGCUN]{30,}'
-            long_sequences = re.finditer(long_seq_pattern, text_content.upper())
-            for match in long_sequences:
-                seq = match.group().replace('U', 'T')  # Convert RNA to DNA notation
-                if seq not in [s['sequence'] for s in findings['sequences_found']]:  # Avoid duplicates
-                    findings['sequences_found'].append({
-                        'type': 'long_nucleotide',
-                        'sequence': seq,
-                        'length': len(seq),
-                        'confidence': 'medium'
-                    })
-                    findings['confidence_score'] += 2
-            
-            # Look for mRNA-related keywords
-            mrna_keywords = [
-                'mRNA', 'messenger RNA', 'nucleotide sequence', 'coding sequence',
-                'CDS', 'open reading frame', 'ORF', 'start codon', 'stop codon',
-                '5\' UTR', '3\' UTR', 'poly(A)', 'cap structure', 'codon optimization',
-                'translation', 'ribosome', 'protein expression', 'ACCATG'
-            ]
-            
-            for keyword in mrna_keywords:
-                if keyword.lower() in text_content.lower():
-                    findings['mrna_indicators'].append(keyword)
-                    findings['confidence_score'] += 1
-            
-            # Only include patents with actual sequence findings or strong mRNA indicators
-            if findings['sequences_found'] or len(findings['mrna_indicators']) >= 3:
-                sequence_findings.append(findings)
-        
-        # Sort by confidence score (highest first)
-        sequence_findings.sort(key=lambda x: x['confidence_score'], reverse=True)
-        
-        return sequence_findings
-    
-    def generate_ai_analysis(self, query: str, context: str) -> str:
-        """Generate AI analysis using Anthropic"""
-        if not self.anthropic:
-            return "Anthropic API is not configured. Please check your .env file."
-        
-        prompt = f"""
-You are a bioinformatics and patent research assistant specializing in DNA, RNA, and molecular biology technologies.
 
-A user has asked: "{query}"
-
-Based on the following patent search results, provide a comprehensive response:
-
-{context}
-
-Please:
-1. Provide a clear answer focused on the molecular biology aspects
-2. Reference specific patents with IDs and titles
-3. Explain key DNA/RNA technologies and innovations
-4. Highlight any codon optimization, sequence analysis, or related molecular techniques
-5. Include relevant patent links
-6. Compare different molecular approaches if applicable
-
-Focus particularly on any DNA sequences, codon usage, protein expression, or related biotechnology innovations.
-"""
-
-        try:
-            message = self.anthropic.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=2000,
-                temperature=0.3,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            return message.content[0].text
-        except Exception as e:
-            return f"Error generating AI response: {e}"
-
-    def generate_sequence_analysis(self, query: str, sequence_findings: List[Dict]) -> str:
-        """Generate AI analysis specifically for sequence findings"""
-        if not self.anthropic or not sequence_findings:
-            return "No sequence analysis available."
-        
-        # Prepare context about sequence findings
-        context = ""
-        for finding in sequence_findings[:5]:  # Top 5 most relevant
-            context += f"""
-Patent: {finding['title']}
-ID: {finding['patent_id']}
-Confidence Score: {finding['confidence_score']}
-mRNA Indicators: {', '.join(finding['mrna_indicators'])}
-Sequences Found: {len(finding['sequences_found'])}
-"""
-            for seq in finding['sequences_found']:
-                context += f"- {seq['type']}: {seq['sequence'][:50]}{'...' if len(seq['sequence']) > 50 else ''} ({seq['length']} bp, {seq['confidence']} confidence)\n"
-            context += f"Link: {finding['link']}\n\n"
-        
-        prompt = f"""
-You are a molecular biology expert analyzing patent-derived nucleotide sequences related to the query: "{query}"
-
-Here are the sequence findings from patents:
-
-{context}
-
-Please analyze these findings and provide:
-
-1. **Most Promising Sequences**: Identify which sequences are most likely to be relevant to the user's search
-2. **Sequence Characteristics**: Analyze the structure and features of the found sequences
-3. **mRNA/Coding Potential**: Assess which sequences might be functional mRNA or coding sequences
-4. **Patent Relevance**: Explain how these sequences relate to the patents' innovations
-5. **Recommendations**: Suggest which sequences the user should focus on for their research
-
-Focus on practical insights about sequence utility, coding potential, and research applications.
-"""
-
-        try:
-            message = self.anthropic.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=1500,
-                temperature=0.3,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            return message.content[0].text
-        except Exception as e:
-            return f"Error generating sequence analysis: {e}"
 
 
 class NCBISearchEngine:
@@ -3721,8 +3509,7 @@ def main():
     # Apply the selected theme CSS
     inject_app_theme()
     # Initialize research engines
-    if 'patent_engine' not in st.session_state:
-        st.session_state.patent_engine = PatentSearchEngine()
+    
     if 'ncbi_engine' not in st.session_state:
         st.session_state.ncbi_engine = NCBISearchEngine()
     if 'uniprot_engine' not in st.session_state:
@@ -3860,7 +3647,7 @@ def main():
                 st.rerun()
     
     # Main interface tabs
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["Single Sequence", "Batch Optimization", "CDS Database Search", "Patent Search", "About", "mRNA Design", "Cancer Vaccine Design"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Single Sequence", "Batch Optimization", "CDS Database Search", "mRNA Design", "Cancer Vaccine Design", "About"])
 
     with tab1:
         st.header("Single Sequence Optimization")
@@ -5405,7 +5192,7 @@ def main():
         
         protein_query = st.text_input(
             "Enter protein search (e.g., 'SARS-CoV-2 spike protein', 'human insulin'):",
-            placeholder="SARS-CoV-2 spike protein",
+            placeholder="Full Name or Protein Makes me Work Better - Yummy",
             key="protein_search_query"
         )
         
@@ -5702,217 +5489,9 @@ def main():
             - **Seamless Transfer**: Direct integration with codon optimization tools
             """) 
     
-    with tab4:
-        st.header("Patent Search")
-        st.markdown("Search for patents related to DNA, RNA, codon optimization, and molecular biology technologies")
-        
-        # Check API configuration
-        col_status1, col_status2 = st.columns(2)
-        with col_status1:
-            serper_status = "✅ Connected" if st.session_state.patent_engine.serper_api_key else "❌ Not configured"
-            st.info(f"**SERPER API:** {serper_status}")
-        with col_status2:
-            anthropic_status = "✅ Connected" if st.session_state.patent_engine.anthropic else "❌ Not configured"
-            st.info(f"**Anthropic API:** {anthropic_status}")
-        
-        if not st.session_state.patent_engine.serper_api_key:
-            st.warning("Please configure SERPER_API_KEY in your .env file to use patent search")
-            st.code("SERPER_API_KEY=your_serper_api_key_here")
-        else:
-            # Add connection test button
-            if st.button("Test SERPER API Connection", key="test_patent_connection"):
-                with st.spinner("Testing connection..."):
-                    test_result = test_serper_connection(st.session_state.patent_engine.serper_api_key)
-                    if test_result["success"]:
-                        st.success("✅ SERPER API connection successful!")
-                    else:
-                        st.error(f"❌ Connection failed: {test_result['error']}")
-                        st.info("Troubleshooting:\n- Check your SERPER API key\n- Verify internet connection\n- Try again in a few moments")
-        
-        patent_query = st.text_area(
-            "Enter your patent search query:",
-            placeholder="""Examples:
-    - Codon optimization methods for protein expression
-    - mRNA vaccine delivery systems
-    - CRISPR gene editing technologies
-    - DNA sequence analysis algorithms
-    - Protein folding prediction methods
-    - Nucleotide sequence modifications""",
-            height=100,
-            key="patent_search_query"
-        )
-        
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            search_patents_btn = st.button("Search Patents", type="primary", disabled=not st.session_state.patent_engine.serper_api_key)
-        with col2:
-            num_patents = st.slider("Number of results", 5, 20, 10, key="patent_num_results")
-        
-        if search_patents_btn and patent_query.strip():
-            with st.spinner("Searching patents..."):
-                search_results = st.session_state.patent_engine.search_patents(patent_query, num_patents)
-                
-                if search_results:
-                    patents = st.session_state.patent_engine.extract_patent_info(search_results)
-                    
-                    # Extract mRNA/nucleotide sequences from patents
-                    sequence_findings = st.session_state.patent_engine.extract_mrna_sequences_from_patents(patents)
-                    
-                    # Prepare context for AI analysis
-                    patent_context = "\n\n".join([
-                        f"Patent: {p['title']}\nID: {p['patent_id']}\nSummary: {p['snippet']}\nLink: {p['link']}"
-                        for p in patents
-                    ])
-                    
-                    # AI Analysis
-                    if st.session_state.patent_engine.anthropic:
-                        st.subheader("AI Analysis")
-                        with st.spinner("Generating AI analysis..."):
-                            ai_response = st.session_state.patent_engine.generate_ai_analysis(patent_query, patent_context)
-                            st.markdown(ai_response)
-                    
-                    # Sequence Analysis Section - NEW
-                    if sequence_findings:
-                        st.subheader("🧬 mRNA/Nucleotide Sequence Analysis")
-                        
-                        # Display sequence findings
-                        st.markdown(f"**Found {len(sequence_findings)} patents with potential mRNA/nucleotide sequences:**")
-                        
-                        for i, finding in enumerate(sequence_findings[:5], 1):  # Show top 5
-                            with st.expander(f"🔬 Patent {i}: {finding['title'][:60]}... (Score: {finding['confidence_score']})", expanded=i <= 2):
-                                col_seq1, col_seq2 = st.columns([2, 1])
-                                
-                                with col_seq1:
-                                    st.write(f"**Patent ID:** {finding['patent_id']}")
-                                    st.write(f"**Title:** {finding['title']}")
-                                    
-                                    if finding['sequences_found']:
-                                        st.markdown("**🧬 Sequences Found:**")
-                                        for seq in finding['sequences_found']:
-                                            st.write(f"- **Type:** {seq['type']} ({seq['confidence']} confidence)")
-                                            st.write(f"- **Length:** {seq['length']} bp")
-                                            
-                                            # Display sequence with copy functionality
-                                            if len(seq['sequence']) <= 200:
-                                                display_copyable_sequence(
-                                                    seq['sequence'], 
-                                                    f"Sequence ({seq['type']})", 
-                                                    f"patent_seq_{i}_{seq['type']}"
-                                                )
-                                            else:
-                                                st.text_area(
-                                                    f"Sequence ({seq['type']}) - First 200 characters:",
-                                                    seq['sequence'][:200] + "...",
-                                                    height=80,
-                                                    key=f"patent_preview_{i}_{seq['type']}"
-                                                )
-                                                
-                                                # Full sequence in expandable section
-                                                with st.expander("View Full Sequence"):
-                                                    display_copyable_sequence(
-                                                        seq['sequence'], 
-                                                        "Full Sequence", 
-                                                        f"patent_full_{i}_{seq['type']}"
-                                                    )
-                                            
-                                            # Transfer to optimizer button
-                                            if st.button(f"🚀 Send to Optimizer", key=f"transfer_patent_{i}_{seq['type']}"):
-                                                st.session_state.transfer_sequence = seq['sequence']
-                                                st.session_state.transfer_sequence_info = {
-                                                    'source': f"Patent {finding['patent_id']} ({seq['type']})",
-                                                    'patent_id': finding['patent_id'],
-                                                    'sequence_type': seq['type'],
-                                                    'length': seq['length'],
-                                                    'confidence': seq['confidence']
-                                                }
-                                                st.success("✅ Sequence sent! Check the 'Single Sequence' tab.")
-                                                st.rerun()
-                                
-                                with col_seq2:
-                                    st.markdown("**📊 Analysis Details:**")
-                                    st.write(f"**Confidence Score:** {finding['confidence_score']}")
-                                    st.write(f"**Sequences Found:** {len(finding['sequences_found'])}")
-                                    
-                                    if finding['mrna_indicators']:
-                                        st.write("**mRNA Indicators:**")
-                                        for indicator in finding['mrna_indicators'][:5]:  # Show first 5
-                                            st.write(f"- {indicator}")
-                                    
-                                    st.link_button("🔗 View Patent", finding['link'], use_container_width=True)
-                        
-                        # Generate AI sequence analysis
-                        if st.session_state.patent_engine.anthropic:
-                            st.subheader("🤖 AI Sequence Analysis")
-                            with st.spinner("Analyzing sequences with AI..."):
-                                sequence_analysis = st.session_state.patent_engine.generate_sequence_analysis(patent_query, sequence_findings)
-                                st.markdown(sequence_analysis)
-                        
-                        # Create downloadable summary
-                        st.subheader("📥 Download Sequence Findings")
-                        
-                        # Prepare data for download
-                        download_data = []
-                        for finding in sequence_findings:
-                            base_info = {
-                                'Patent_ID': finding['patent_id'],
-                                'Patent_Title': finding['title'],
-                                'Patent_Link': finding['link'],
-                                'Confidence_Score': finding['confidence_score'],
-                                'mRNA_Indicators': ', '.join(finding['mrna_indicators']),
-                                'Total_Sequences': len(finding['sequences_found'])
-                            }
-                            
-                            if finding['sequences_found']:
-                                for i, seq in enumerate(finding['sequences_found']):
-                                    row = base_info.copy()
-                                    row.update({
-                                        'Sequence_Number': i + 1,
-                                        'Sequence_Type': seq['type'],
-                                        'Sequence_Length': seq['length'],
-                                        'Sequence_Confidence': seq['confidence'],
-                                        'Sequence_Data': seq['sequence']
-                                    })
-                                    download_data.append(row)
-                            else:
-                                row = base_info.copy()
-                                row.update({
-                                    'Sequence_Number': 0,
-                                    'Sequence_Type': 'None',
-                                    'Sequence_Length': 0,
-                                    'Sequence_Confidence': 'N/A',
-                                    'Sequence_Data': ''
-                                })
-                                download_data.append(row)
-                        
-                        if download_data:
-                            download_df = pd.DataFrame(download_data)
-                            excel_data = create_download_link(download_df, f"Patent_Sequences_{len(sequence_findings)}_patents.xlsx")
-                            st.download_button(
-                                label="📥 Download Sequence Analysis (Excel)",
-                                data=excel_data,
-                                file_name=f"Patent_Sequences_{len(sequence_findings)}_patents.xlsx",
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                help="Download complete analysis of found sequences"
-                            )
-                    
-                    # Patent Results
-                    st.subheader(f"Patent Search Results ({len(patents)} found)")
-                    
-                    for i, patent in enumerate(patents, 1):
-                        with st.expander(f"Patent {i}: {patent['title'][:80]}..."):
-                            col_info, col_link = st.columns([3, 1])
-                            
-                            with col_info:
-                                st.write(f"**Patent ID:** {patent['patent_id']}")
-                                st.write(f"**Title:** {patent['title']}")
-                                st.write(f"**Summary:** {patent['snippet']}")
-                            
-                            with col_link:
-                                st.link_button("View Patent", patent['link'], use_container_width=True)
-                else:
-                    st.warning("No patents found for your query. Try different keywords.")
     
-    with tab5:
+    
+    with tab6:
         st.header("About")
         st.markdown("""
         ### DNA Codon Optimization Tool v2.5
@@ -6000,7 +5579,7 @@ def main():
         **Version:** Streamlit v2.5 (Interactive Visualizations & Enhanced Analysis)
         """)
 
-    with tab6:
+    with tab4:
         st.header("mRNA Design")
         st.markdown("Design a full-length mRNA sequence by providing a coding sequence (CDS) and adding UTRs.")
 
@@ -6483,7 +6062,7 @@ def main():
              
 
                             
-    with tab7:
+    with tab5:
             st.header("Cancer Vaccine Design")
             st.markdown("Design a personalized cancer vaccine by combining multiple peptides with appropriate linkers")
             
@@ -6911,6 +6490,7 @@ if __name__ == "__main__":
     
     #Make it so all CAI graphs have the option to overlay +1,-1 and slippery sites
     #Make it properly colourblind friendly - not all colours are safe 
+    
     
 
     
