@@ -1,6 +1,3 @@
-# - [ ] Fix slippery sites per 100bp: its not showing the correct numbers - still doesnt work its just bp/slippery motifs
-# - No sorry make it so that the single sequence optimisation has the before and after optimisation graphs like in batch optimisation 
-
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
@@ -866,7 +863,13 @@ def create_interactive_bar_chart(x_data, y_data, labels, title, color_scheme='vi
 
 def create_interactive_pie_chart(values, labels, title, show_percentages=True):
     """Create interactive pie chart using the active theme"""
-    theme_analysis_colors = get_consistent_color_palette(len(labels), "analysis")
+    # Get theme colors - use first few colors from analysis palette
+    theme_colors = THEMES[st.session_state.active_theme]["colors"]["analysis"]
+    
+    # Create color list matching the number of labels
+    chart_colors = []
+    for i in range(len(labels)):
+        chart_colors.append(theme_colors[i % len(theme_colors)])
     
     # For single sequence analysis, show absolute numbers
     textinfo = 'label+percent' if show_percentages else 'label+value'
@@ -876,13 +879,28 @@ def create_interactive_pie_chart(values, labels, title, show_percentages=True):
         values=values,
         hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percent}<extra></extra>',
         textinfo=textinfo,
-        marker=dict(colors=theme_analysis_colors)
+        marker=dict(
+            colors=chart_colors,
+            line=dict(color='#FFFFFF', width=2)  # White borders for better definition
+        )
     ))
     
     fig.update_layout(
-        title=title,
+        title=dict(
+            text=title,
+            x=0.5,  # Center the title
+            font=dict(size=14)
+        ),
         height=400,
-        showlegend=True
+        showlegend=True,
+        legend=dict(
+            orientation="v",
+            yanchor="middle",
+            y=0.5,
+            xanchor="left",
+            x=1.05
+        ),
+        margin=dict(l=20, r=120, t=50, b=20)  # Adjust margins for legend
     )
     
     return fig
@@ -1080,22 +1098,23 @@ def create_interactive_cai_gc_overlay_plot(
     
 
 
-def display_stateful_overlay_chart(positions, cai_weights, amino_acids, sequence, seq_name, plus1_stop_positions, minus1_stop_positions, slippery_positions):
+def display_stateful_overlay_chart(positions, cai_weights, amino_acids, sequence, seq_name, plus1_stop_positions, minus1_stop_positions, slippery_positions, cai_color='#4ECDC4'):
     """Renders the chart as a self-contained HTML component to prevent Streamlit reruns."""
 
     st.info("💡 **Interactive Chart**: Click on legend items (e.g., '+1 Stops') to toggle their visibility on the chart.")
 
     # 1. Create the Plotly figure object as before.
     overlay_fig = create_interactive_cai_gc_overlay_plot(
-        positions=positions,
-        cai_weights=cai_weights,
-        amino_acids=amino_acids,
-        sequence=sequence,
-        seq_name=seq_name,
-        plus1_stop_positions=plus1_stop_positions,
-        minus1_stop_positions=minus1_stop_positions,
-        slippery_positions=slippery_positions
-    )
+    positions=positions,
+    cai_weights=cai_weights,
+    amino_acids=amino_acids,
+    sequence=sequence,
+    seq_name=seq_name,
+    plus1_stop_positions=plus1_stop_positions,
+    minus1_stop_positions=minus1_stop_positions,
+    slippery_positions=slippery_positions,
+    color=cai_color
+)
 
     # 2. Convert the figure to a self-contained HTML block.
     # This packages all the necessary JavaScript and data into one string.
@@ -3539,12 +3558,58 @@ def main():
     with st.sidebar:
         st.header("Configuration")
         
-        # Auto-load default codon file if available and not already loaded
-        if not st.session_state.genetic_code and 'codon_data_loaded' not in st.session_state:
-            default_codon_file = "HumanCodons.xlsx"
-            if os.path.exists(default_codon_file):
+        # Define available codon files
+        CODON_FILES = {
+            "Human (Homo sapiens)": "HumanCodons.xlsx",
+            "Mouse (Mus musculus)": "MouseCodons.xlsx", 
+            "E. coli": "E.coliCodons.xlsx"
+        }
+        
+        # Check which files actually exist
+        available_files = {}
+        for species, filename in CODON_FILES.items():
+            if os.path.exists(filename):
+                available_files[species] = filename
+        
+        # Codon usage file selection
+        st.subheader("Codon Usage Selection")
+        
+        if available_files:
+            # Initialize current selection if not exists
+            if 'selected_codon_file' not in st.session_state:
+                st.session_state.selected_codon_file = list(available_files.keys())[0]  # First available
+            
+            # Make sure current selection is still available
+            if st.session_state.selected_codon_file not in available_files:
+                st.session_state.selected_codon_file = list(available_files.keys())[0]
+            
+            selected_codon_species = st.selectbox(
+                "Select organism codon usage:",
+                list(available_files.keys()),
+                index=list(available_files.keys()).index(st.session_state.selected_codon_file),
+                key="codon_species_selector"
+            )
+            
+            # Check if selection changed
+            if selected_codon_species != st.session_state.selected_codon_file:
+                st.session_state.selected_codon_file = selected_codon_species
+                # Clear existing codon data to force reload
+                st.session_state.genetic_code = {}
+                st.session_state.codon_weights = {}
+                st.session_state.preferred_codons = {}
+                st.session_state.human_codon_usage = {}
+                st.session_state.aa_to_codons = defaultdict(list)
+                if 'codon_data_loaded' in st.session_state:
+                    del st.session_state.codon_data_loaded
+                if 'codon_file_source' in st.session_state:
+                    del st.session_state.codon_file_source
+            
+            # Auto-load selected codon file if not already loaded
+            selected_file_path = available_files[selected_codon_species]
+            
+            if not st.session_state.genetic_code and 'codon_data_loaded' not in st.session_state:
                 try:
-                    with open(default_codon_file, 'rb') as f:
+                    with open(selected_file_path, 'rb') as f:
                         file_content = f.read()
                     genetic_code, codon_weights, preferred_codons, human_codon_usage, aa_to_codons, codon_df = load_codon_data_from_file(file_content)
                     st.session_state.genetic_code = genetic_code
@@ -3553,17 +3618,47 @@ def main():
                     st.session_state.human_codon_usage = human_codon_usage
                     st.session_state.aa_to_codons = aa_to_codons
                     st.session_state.codon_data_loaded = True
-                    st.session_state.codon_file_source = "Default (HumanCodons.xlsx)"
-                    st.success(f"Auto-loaded {len(codon_df)} codon entries from HumanCodons.xlsx")
+                    st.session_state.codon_file_source = f"{selected_codon_species} ({selected_file_path})"
+                    st.success(f"✅ Loaded {len(codon_df)} codon entries from {selected_codon_species}")
                 except Exception as e:
-                    st.warning(f"Could not auto-load HumanCodons.xlsx: {e}")
+                    st.error(f"❌ Could not load {selected_file_path}: {e}")
+        
+        else:
+            # No organism files available - show file status and allow upload
+            st.warning("⚠️ No organism codon files found")
+            st.markdown("**Missing files:**")
+            for species, filename in CODON_FILES.items():
+                st.write(f"❌ {filename} ({species})")
+            st.info("💡 Use the upload option below or add codon files to the application directory")
         
         # Display current codon file status
         if st.session_state.genetic_code:
             codon_source = st.session_state.get('codon_file_source', 'Unknown')
-            st.info(f"**Codon Data Loaded:** {codon_source}")
-            if st.button("Clear Codon Data", help="Clear current codon data to upload a different file"):
-                # Clear all codon-related session state
+            st.success(f"**Active:** {codon_source}")
+            
+            # Show some basic stats about the loaded codon usage
+            with st.expander("📊 Codon Usage Stats", expanded=False):
+                if st.session_state.human_codon_usage:
+                    num_codons = len(st.session_state.human_codon_usage)
+                    num_amino_acids = len(st.session_state.aa_to_codons)
+                    avg_frequency = sum(st.session_state.human_codon_usage.values()) / num_codons if num_codons > 0 else 0
+                    
+                    stat_col1, stat_col2 = st.columns(2)
+                    with stat_col1:
+                        st.metric("Total Codons", num_codons)
+                        st.metric("Amino Acids", num_amino_acids)
+                    with stat_col2:
+                        st.metric("Avg Frequency", f"{avg_frequency:.3f}")
+                        
+                    # Show top 5 most frequent codons
+                    top_codons = sorted(st.session_state.human_codon_usage.items(), key=lambda x: x[1], reverse=True)[:5]
+                    st.markdown("**Top 5 Codons:**")
+                    for codon, freq in top_codons:
+                        aa = st.session_state.genetic_code.get(codon, '?')
+                        st.write(f"• {codon} ({aa}): {freq:.3f}")
+            
+            if st.button("🔄 Switch Codon Usage", help="Change to a different organism's codon usage"):
+                # Clear current data to force reload
                 st.session_state.genetic_code = {}
                 st.session_state.codon_weights = {}
                 st.session_state.preferred_codons = {}
@@ -3575,11 +3670,13 @@ def main():
                     del st.session_state.codon_file_source
                 st.rerun()
         
-        # Codon usage file upload
+        # Manual file upload (always available)
+        st.markdown("---")
+        st.markdown("**Upload Codon Usage File**")
         uploaded_file = st.file_uploader(
-            "Upload Different Codon Usage File", 
+            "Upload Codon Usage File (.xlsx)", 
             type=['xlsx'],
-            help="Upload a different codon usage frequency file to override the default",
+            help="Upload a codon usage frequency file (Excel format)",
             key="codon_uploader"
         )
         
@@ -3593,14 +3690,17 @@ def main():
                 st.session_state.human_codon_usage = human_codon_usage
                 st.session_state.aa_to_codons = aa_to_codons
                 st.session_state.codon_data_loaded = True
-                st.session_state.codon_file_source = f"Uploaded ({uploaded_file.name})"
-                st.success(f"Loaded {len(codon_df)} codon entries from {uploaded_file.name}")
+                st.session_state.codon_file_source = f"Custom Upload ({uploaded_file.name})"
+                st.session_state.selected_codon_file = f"Custom ({uploaded_file.name})"
+                st.success(f"✅ Loaded {len(codon_df)} codon entries from {uploaded_file.name}")
                 st.rerun()
             except Exception as e:
-                st.error(f"Error loading codon file: {e}")
-        elif not st.session_state.genetic_code:
-            st.warning("No codon usage file found. Please upload HumanCodons.xlsx or place it in the application directory.")
-            st.stop()
+                st.error(f"❌ Error loading codon file: {e}")
+        
+        # Only show warning if no codon data is loaded at all
+        if not st.session_state.genetic_code:
+            st.warning("⚠️ **No codon usage data loaded**")
+            st.info("Please upload a codon usage file to continue, or add organism files to the application directory.")
         
         st.divider()
         
@@ -3645,9 +3745,10 @@ def main():
                 st.session_state.accumulated_results = []
                 st.session_state.run_counter = 0
                 st.rerun()
-    
+
     # Main interface tabs
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Single Sequence", "Batch Optimization", "CDS Database Search", "mRNA Design", "Cancer Vaccine Design", "About"])
+
 
     with tab1:
         st.header("Single Sequence Optimization")
@@ -4259,13 +4360,15 @@ def main():
                             st.subheader("📊 Interactive Individual In-Frame Analysis")
                             
                             # Create a unique key for this batch session
-                            batch_key = f"batch_{len(sequences)}_{hash(str([name for name, _ in sequences]))}"
+                            # Create a unique key for this batch session that includes the codon usage
+                            current_organism = st.session_state.get('codon_file_source', 'Unknown')
+                            batch_key = f"batch_{len(sequences)}_{hash(str([name for name, _ in sequences]))}_{hash(current_organism)}"
                             cai_data_key = f'batch_cai_data_{batch_key}'
-                            
-                            # Initialize cai_sequences
+
+                                # Initialize cai_sequences
                             cai_sequences = []
-                            
-                            # Process sequences if not already cached
+
+                                # Process sequences if not already cached OR if organism changed
                             if cai_data_key not in st.session_state:
                                 with st.spinner("Processing In-Frame data for all sequences..."):
                                     st.session_state[cai_data_key] = []
@@ -4297,6 +4400,7 @@ def main():
                             # Display results
                             if cai_sequences:
                                 # Display all In-Frame interactive graphs
+                                # Display all In-Frame interactive graphs
                                 colors = get_consistent_color_palette(len(cai_sequences), "analysis")
                                 for i, selected_data in enumerate(cai_sequences):
                                     df = selected_data['cai_data']
@@ -4310,18 +4414,24 @@ def main():
                                         cai_weights = df['CAI_Weight'].tolist()
                                         amino_acids = df['Amino_Acid'].tolist()
                                         
-                                        # Create interactive plot with GC content
-                                        color = colors[i % len(colors)]
-                                        fig = create_interactive_cai_gc_plot(
-                                            positions, 
-                                            cai_weights, 
-                                            amino_acids, 
-                                            seq_sequence, 
-                                            seq_name,
-                                            color
-                                        )
+                                        plus1_stop_positions = get_plus1_stop_positions(seq_sequence)
+                                        minus1_stop_positions = get_minus1_stop_positions(seq_sequence)
+                                        slippery_positions = get_slippery_motif_positions(seq_sequence)
                                         
-                                        st.plotly_chart(fig, use_container_width=True, key=f"batch_in_frame_gc_{i}")
+                                        # Use different color for each sequence
+                                        cai_color = colors[i % len(colors)]
+                                        
+                                        display_stateful_overlay_chart(
+                                            positions=positions,
+                                            cai_weights=cai_weights,
+                                            amino_acids=amino_acids,
+                                            sequence=seq_sequence,
+                                            seq_name=seq_name,
+                                            plus1_stop_positions=plus1_stop_positions,
+                                            minus1_stop_positions=minus1_stop_positions,
+                                            slippery_positions=slippery_positions,
+                                            cai_color=cai_color  # Add this parameter
+                                        )
                                         
                                         # Statistics including GC content
                                         col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
@@ -5269,226 +5379,341 @@ def main():
                     for ref in selected_entry['nucleotide_refs']:
                         st.write(f"- **{ref['database']}:** {ref['id']}")
             
-            # Step 3: Get NCBI Details
-            if selected_entry['nucleotide_refs']:
-                st.markdown("#### Step 3: Retrieve NCBI CDS Information")
-                
-                get_ncbi_btn = st.button("🧬 Get CDS from NCBI", type="primary")
-                
-                if get_ncbi_btn:
-                    # Try each nucleotide reference
-                    for ref in selected_entry['nucleotide_refs']:
-                        if ref['database'] in ['EMBL', 'RefSeq']:
-                            accession = ref['id']
-                            
-                            with st.spinner(f"Retrieving CDS information for {accession}..."):
-                                try:
-                                    ncbi_details = st.session_state.ncbi_engine.scrape_ncbi_page(accession, protein_query)
-                                    
-                                    if ncbi_details['success'] and ncbi_details['cds_sequences']:
-                                        st.session_state.ncbi_details = ncbi_details
-                                        st.session_state.cds_options = ncbi_details['cds_sequences']
-                                        st.success(f"✅ Retrieved {len(ncbi_details['cds_sequences'])} CDS features")
-                                        break
-                                    else:
-                                        st.warning(f"⚠️ No CDS found in {accession}")
-                                        
-                                except Exception as e:
-                                    st.error(f"Error retrieving {accession}: {str(e)}")
-                                    continue
+            
+            # Step 3: Choose CDS Source
+            st.markdown("#### Step 3: Choose CDS Source")
+
+            cds_source_method = st.radio(
+                "Select how to get the CDS:",
+                ("Search NCBI Databases", "Use UniProt Protein (Reverse Translate)"),
+                key="cds_source_selection"
+            )
+
+            if cds_source_method == "Search NCBI Databases":
+                if selected_entry['nucleotide_refs']:
+                    st.markdown("**🧬 NCBI Database Search**")
+                    st.info("This will search for native genomic sequences from NCBI cross-references.")
                     
-                    if not st.session_state.cds_options:
-                        st.error("❌ Could not retrieve CDS information from any cross-reference")
+                    get_ncbi_btn = st.button("🧬 Get CDS from NCBI", type="primary")
+                    
+                    if get_ncbi_btn:
+                        # Try each nucleotide reference
+                        ncbi_success = False
+                        for ref in selected_entry['nucleotide_refs']:
+                            if ref['database'] in ['EMBL', 'RefSeq']:
+                                accession = ref['id']
+                                
+                                with st.spinner(f"Retrieving CDS information for {accession}..."):
+                                    try:
+                                        ncbi_details = st.session_state.ncbi_engine.scrape_ncbi_page(accession, protein_query)
+                                        
+                                        if ncbi_details['success'] and ncbi_details['cds_sequences']:
+                                            st.session_state.ncbi_details = ncbi_details
+                                            st.session_state.cds_options = ncbi_details['cds_sequences']
+                                            st.success(f"✅ Retrieved {len(ncbi_details['cds_sequences'])} native CDS features")
+                                            ncbi_success = True
+                                            break
+                                        else:
+                                            st.warning(f"⚠️ No CDS found in {accession}")
+                                            
+                                    except Exception as e:
+                                        st.error(f"Error retrieving {accession}: {str(e)}")
+                                        continue
+                        
+                        if not ncbi_success:
+                            st.error("❌ Could not retrieve CDS information from any cross-reference")
+                            st.info("💡 **Tip:** Try the 'Use UniProt Protein' option above as an alternative.")
+                
+                else:
+                    st.warning("⚠️ **No nucleotide cross-references available** for this UniProt entry.")
+                    st.info("💡 **Suggestion:** Use the 'Use UniProt Protein (Reverse Translate)' option above.")
+
+            elif cds_source_method == "Use UniProt Protein (Reverse Translate)":
+                st.markdown("**🔄 UniProt Protein Reverse Translation**")
+                st.warning("⚠️ **Note:** This creates a synthetic sequence optimized for human codon usage, not a native genomic sequence.")
+                
+                if selected_entry.get('protein_sequence'):
+                    st.info(f"**Available:** UniProt protein sequence ({selected_entry['length']} amino acids)")
+                    
+                    # Show protein sequence preview
+                    with st.expander("👀 Preview Protein Sequence", expanded=False):
+                        protein_preview = selected_entry['protein_sequence'][:200]
+                        if len(selected_entry['protein_sequence']) > 200:
+                            protein_preview += f"... [+{len(selected_entry['protein_sequence'])-200} more amino acids]"
+                        st.text_area("Protein Sequence:", protein_preview, height=100, key="protein_preview")
+                    
+                    use_protein_btn = st.button("🔄 Reverse Translate Protein Sequence", type="primary")
+                    
+                    if use_protein_btn:
+                        with st.spinner("Reverse translating protein sequence..."):
+                            try:
+                                protein_seq = selected_entry['protein_sequence']
+                                reverse_translated_dna = reverse_translate_highest_cai(protein_seq)
+                                
+                                # Create synthetic CDS entry
+                                synthetic_cds = {
+                                    'accession': f"{selected_entry['accession']}_RT",  # Add RT suffix
+                                    'protein_name': selected_entry['protein_name'],
+                                    'gene_name': selected_entry['gene_names'],
+                                    'product': f"{selected_entry['protein_name']} (reverse translated)",
+                                    'locus_tag': selected_entry['accession'],
+                                    'start_position': 1,
+                                    'end_position': len(reverse_translated_dna),
+                                    'header': f">{selected_entry['accession']}_RT {selected_entry['protein_name']} (reverse translated from UniProt)",
+                                    'sequence': reverse_translated_dna,
+                                    'length': len(reverse_translated_dna),
+                                    'url': selected_entry['uniprot_url'],
+                                    'valid_dna': True,
+                                    'is_reverse_translated': True,
+                                    'original_protein': protein_seq,
+                                    'source_type': 'UniProt Reverse Translation'
+                                }
+                                
+                                st.session_state.cds_options = [synthetic_cds]
+                                st.session_state.ncbi_details = {
+                                    'accession': selected_entry['accession'],
+                                    'success': True,
+                                    'cds_sequences': [synthetic_cds],
+                                    'is_fallback': True,
+                                    'source_type': 'UniProt Reverse Translation'
+                                }
+                                
+                                st.success("✅ Successfully reverse-translated protein sequence!")
+                                
+                                # Show some stats
+                                col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
+                                with col_stat1:
+                                    st.metric("DNA Length", f"{len(reverse_translated_dna)} bp")
+                                with col_stat2:
+                                    st.metric("Protein Length", f"{len(protein_seq)} aa")
+                                with col_stat3:
+                                    gc_content = calculate_gc_content(reverse_translated_dna)
+                                    st.metric("GC Content", f"{gc_content:.1f}%")
+                                with col_stat4:
+                                    weights, _ = get_codon_weights_row(reverse_translated_dna)
+                                    avg_cai = sum(weights) / len(weights) if weights else 0
+                                    st.metric("Avg CAI", f"{avg_cai:.3f}")
+                                
+                            except Exception as e:
+                                st.error(f"Error during reverse translation: {str(e)}")
+                
+                else:
+                    st.error("❌ No protein sequence available from UniProt entry")
+
+            # If no nucleotide references, offer protein fallback immediately
+            else:
+                st.markdown("#### 🔄 Protein Sequence Fallback")
+                st.warning("⚠️ **No nucleotide cross-references found** in this UniProt entry.")
+                
+                if selected_entry.get('protein_sequence'):
+                    st.info(f"**Available:** UniProt protein sequence ({selected_entry['length']} amino acids)")
+                    st.markdown("You can reverse-translate this protein sequence as a fallback option.")
+                    
+                    use_protein_direct = st.button("🔄 Use Protein Sequence (Reverse Translate)", type="primary")
+                    
+                    if use_protein_direct:
+                        with st.spinner("Reverse translating protein sequence..."):
+                            try:
+                                protein_seq = selected_entry['protein_sequence']
+                                reverse_translated_dna = reverse_translate_highest_cai(protein_seq)
+                                
+                                synthetic_cds = {
+                                    'accession': selected_entry['accession'],
+                                    'protein_name': selected_entry['protein_name'],
+                                    'gene_name': selected_entry['gene_names'],
+                                    'product': f"{selected_entry['protein_name']} (reverse translated)",
+                                    'locus_tag': selected_entry['accession'],
+                                    'start_position': 1,
+                                    'end_position': len(reverse_translated_dna),
+                                    'header': f">{selected_entry['accession']} {selected_entry['protein_name']} (reverse translated from UniProt)",
+                                    'sequence': reverse_translated_dna,
+                                    'length': len(reverse_translated_dna),
+                                    'url': selected_entry['uniprot_url'],
+                                    'valid_dna': True,
+                                    'is_reverse_translated': True,
+                                    'original_protein': protein_seq
+                                }
+                                
+                                st.session_state.cds_options = [synthetic_cds]
+                                st.session_state.ncbi_details = {
+                                    'accession': selected_entry['accession'],
+                                    'success': True,
+                                    'cds_sequences': [synthetic_cds],
+                                    'is_fallback': True
+                                }
+                                
+                                st.success("✅ Successfully reverse-translated protein sequence!")
+                                st.warning("⚠️ **Note:** This is a synthetic sequence optimized for human codon usage, not the native genomic sequence.")
+                                
+                            except Exception as e:
+                                st.error(f"Error during reverse translation: {str(e)}")
+                else:
+                    st.error("❌ No protein sequence available from UniProt entry")
         
         # Step 4: CDS Selection and Extraction
-        if st.session_state.cds_options:
-            st.markdown("#### Step 4: Select CDS to Extract")
-            
-            # Create CDS dropdown options
-            cds_dropdown_options = []
-            for i, cds in enumerate(st.session_state.cds_options):
-                gene_name = cds.get('gene_name', 'Unknown')
-                product = cds.get('product', cds.get('protein_name', 'Unknown'))
-                positions = f"{cds.get('start_position', 0)}-{cds.get('end_position', 0)}"
-                length = cds.get('length', 0)
+            if st.session_state.cds_options:
+                # Determine source type for display
+                source_type = "Native NCBI" 
+                if st.session_state.get('ncbi_details', {}).get('source_type') == 'UniProt Reverse Translation':
+                    source_type = "Reverse Translated"
                 
-                option_text = f"{gene_name} | {product} | {positions} | {length} bp"
-                cds_dropdown_options.append(option_text)
-            
-            selected_cds_idx = st.selectbox(
-                "Choose a CDS feature:",
-                range(len(cds_dropdown_options)),
-                format_func=lambda x: cds_dropdown_options[x],
-                key="cds_selection"
-            )
-            
-            selected_cds = st.session_state.cds_options[selected_cds_idx]
-            
-            # Display selected CDS details
-            with st.expander("🧬 Selected CDS Details", expanded=True):
-                col_cds1, col_cds2, col_cds3 = st.columns(3)
-                with col_cds1:
-                    st.write(f"**Gene:** {selected_cds.get('gene_name', 'N/A')}")
-                    st.write(f"**Product:** {selected_cds.get('product', 'N/A')}")
-                    st.write(f"**Locus Tag:** {selected_cds.get('locus_tag', 'N/A')}")
-                with col_cds2:
-                    st.write(f"**Position:** {selected_cds.get('start_position', 0)}-{selected_cds.get('end_position', 0)}")
-                    st.write(f"**Length:** {selected_cds.get('length', 0)} bp")
-                    st.write(f"**Valid DNA:** {selected_cds.get('valid_dna', False)}")
-                with col_cds3:
-                    if selected_cds.get('url'):
-                        st.markdown(f"**[🔗 View NCBI Record]({selected_cds['url']})**")
-            
-            # Step 5: Show extracted sequence
-            if selected_cds.get('sequence') and selected_cds.get('valid_dna'):
-                st.markdown("#### Step 5: Extracted CDS Sequence")
+                st.markdown(f"#### Step 4: Select CDS to Extract ({source_type})")
                 
-                sequence = selected_cds['sequence']
-                header = selected_cds.get('header', f">{selected_cds.get('accession', 'Unknown')}")
+                # Create CDS dropdown options
+                cds_dropdown_options = []
+                for i, cds in enumerate(st.session_state.cds_options):
+                    gene_name = cds.get('gene_name', 'Unknown')
+                    product = cds.get('product', cds.get('protein_name', 'Unknown'))
+                    positions = f"{cds.get('start_position', 0)}-{cds.get('end_position', 0)}"
+                    length = cds.get('length', 0)
+                    
+                    # Add source indicator
+                    source_indicator = ""
+                    if cds.get('is_reverse_translated'):
+                        source_indicator = " [RT]"  # Reverse Translated
+                    
+                    option_text = f"{gene_name} | {product} | {positions} | {length} bp{source_indicator}"
+                    cds_dropdown_options.append(option_text)
                 
-            
-                display_copyable_sequence(
-                    sequence,
-                    "CDS DNA Sequence:",
-                    "extracted_cds"
-                )
-                
-                # Analysis and action buttons
-                col_action1, col_action2, col_action3 = st.columns(3)
-                
-                with col_action1:
-                    if st.button("🔬 Quick Analysis", key="cds_quick_analysis"):
-                        try:
-                            protein = translate_dna(sequence)
-                            plus1_stops = number_of_plus1_stops(sequence)
-                            slippery = number_of_slippery_motifs(sequence)
-                            weights, _ = get_codon_weights_row(sequence)
-                            avg_cai = sum(weights) / len(weights) if weights else 0
-                            
-                            st.markdown("**🔬 CDS Analysis Results:**")
-                            anal_col1, anal_col2, anal_col3, anal_col4 = st.columns(4)
-                            with anal_col1:
-                                st.metric("DNA Length", f"{len(sequence)} bp")
-                            with anal_col2:
-                                st.metric("Protein Length", f"{len(protein)} aa")
-                            with anal_col3:
-                                st.metric("+1 Frame Stops", plus1_stops['total'])
-                            with anal_col4:
-                                st.metric("Avg CAI", f"{avg_cai:.3f}")
-                            
-                            with st.expander("Translated Protein Sequence"):
-                                st.text_area("Protein:", protein, height=100, key="cds_protein_result")
-                                
-                        except Exception as e:
-                            st.error(f"Analysis error: {e}")
-                
-                with col_action2:
-                    if st.button("⚡ Send to Optimizer", key="send_cds_to_optimizer"):
-                        # Store the sequence for transfer to Single Sequence tab
-                        st.session_state.transfer_sequence = sequence
-                        st.session_state.transfer_sequence_info = {
-                            'source': f"{selected_cds.get('gene_name', 'Unknown')} from {selected_cds.get('accession', 'Unknown')}",
-                            'accession': selected_cds.get('accession', 'Unknown'),
-                            'protein_name': selected_cds.get('product', 'Unknown'),
-                            'length': len(sequence),
-                            'positions': f"{selected_cds.get('start_position', 0)}-{selected_cds.get('end_position', 0)}"
-                        }
-                        st.success("✅ Sequence sent! Check the 'Single Sequence' tab.")
-                        st.rerun()
-                
-                with col_action3:
-                    # Download as FASTA
-                    fasta_content = f"{header}\n{sequence}"
-                    st.download_button(
-                        "💾 Download FASTA",
-                        fasta_content,
-                        file_name=f"{selected_cds.get('gene_name', 'cds')}_{selected_cds.get('accession', 'unknown')}.fasta",
-                        mime="text/plain",
-                        help="Download CDS sequence in FASTA format"
+                # Safe selectbox with validation
+                if len(cds_dropdown_options) > 0:
+                    selected_cds_idx = st.selectbox(
+                        "Choose a CDS feature:",
+                        range(len(cds_dropdown_options)),
+                        format_func=lambda x: cds_dropdown_options[x] if x is not None else "No options available",
+                        key="cds_selection"
                     )
+                    
+                    # Validate the selection
+                    if selected_cds_idx is not None and 0 <= selected_cds_idx < len(st.session_state.cds_options):
+                        selected_cds = st.session_state.cds_options[selected_cds_idx]
+                        
+                        # Display selected CDS details
+                        with st.expander("🧬 Selected CDS Details", expanded=True):
+                            # Add source-specific warnings
+                            if selected_cds.get('is_reverse_translated'):
+                                st.warning("⚠️ **SYNTHETIC SEQUENCE**: This is a reverse-translated sequence from the UniProt protein, not a native genomic sequence. It has been optimized for human codon usage.")
+                                st.info("**Source:** Reverse translation of UniProt protein sequence using highest CAI codons")
+                            else:
+                                st.success("✅ **NATIVE SEQUENCE**: This is a native genomic sequence from NCBI databases.")
+                            
+                            col_cds1, col_cds2, col_cds3 = st.columns(3)
+                            with col_cds1:
+                                st.write(f"**Gene:** {selected_cds.get('gene_name', 'N/A')}")
+                                st.write(f"**Product:** {selected_cds.get('product', 'N/A')}")
+                                st.write(f"**Locus Tag:** {selected_cds.get('locus_tag', 'N/A')}")
+                            with col_cds2:
+                                st.write(f"**Position:** {selected_cds.get('start_position', 0)}-{selected_cds.get('end_position', 0)}")
+                                st.write(f"**Length:** {selected_cds.get('length', 0)} bp")
+                                st.write(f"**Valid DNA:** {selected_cds.get('valid_dna', False)}")
+                            with col_cds3:
+                                if selected_cds.get('url'):
+                                    if selected_cds.get('is_reverse_translated'):
+                                        st.markdown(f"**[🔗 View UniProt Record]({selected_cds['url']})**")
+                                    else:
+                                        st.markdown(f"**[🔗 View NCBI Record]({selected_cds['url']})**")
+                        
+                        # Step 5: Show extracted sequence
+                        if selected_cds.get('sequence') and selected_cds.get('valid_dna'):
+                            st.markdown("#### Step 5: Extracted CDS Sequence")
+                            
+                            sequence = selected_cds['sequence']
+                            header = selected_cds.get('header', f">{selected_cds.get('accession', 'Unknown')}")
+                            
+                            display_copyable_sequence(
+                                sequence,
+                                "CDS DNA Sequence:",
+                                "extracted_cds"
+                            )
+                            
+                            # Analysis and action buttons
+                            col_action1, col_action2, col_action3 = st.columns(3)
+                            
+                            with col_action1:
+                                if st.button("🔬 Quick Analysis", key="cds_quick_analysis"):
+                                    try:
+                                        protein = translate_dna(sequence)
+                                        plus1_stops = number_of_plus1_stops(sequence)
+                                        slippery = number_of_slippery_motifs(sequence)
+                                        weights, _ = get_codon_weights_row(sequence)
+                                        avg_cai = sum(weights) / len(weights) if weights else 0
+                                        
+                                        st.markdown("**🔬 CDS Analysis Results:**")
+                                        anal_col1, anal_col2, anal_col3, anal_col4 = st.columns(4)
+                                        with anal_col1:
+                                            st.metric("DNA Length", f"{len(sequence)} bp")
+                                        with anal_col2:
+                                            st.metric("Protein Length", f"{len(protein)} aa")
+                                        with anal_col3:
+                                            st.metric("+1 Frame Stops", plus1_stops['total'])
+                                        with anal_col4:
+                                            st.metric("Avg CAI", f"{avg_cai:.3f}")
+                                        
+                                        with st.expander("Translated Protein Sequence"):
+                                            st.text_area("Protein:", protein, height=100, key="cds_protein_result")
+                                            
+                                            # Show if reverse-translated sequence matches original
+                                            if selected_cds.get('is_reverse_translated') and selected_cds.get('original_protein'):
+                                                original_protein = selected_cds['original_protein']
+                                                if protein == original_protein:
+                                                    st.success("✅ Reverse translation successful - protein sequences match!")
+                                                else:
+                                                    st.warning("⚠️ Translated protein differs from original (this shouldn't happen)")
+                                            
+                                    except Exception as e:
+                                        st.error(f"Analysis error: {e}")
+                            
+                            with col_action2:
+                                if st.button("⚡ Send to Optimizer", key="send_cds_to_optimizer"):
+                                    # Store the sequence for transfer to Single Sequence tab
+                                    st.session_state.transfer_sequence = sequence
+                                    source_info = f"{selected_cds.get('gene_name', 'Unknown')} from {selected_cds.get('accession', 'Unknown')}"
+                                    if selected_cds.get('is_reverse_translated'):
+                                        source_info += " (reverse translated)"
+                                    
+                                    st.session_state.transfer_sequence_info = {
+                                        'source': source_info,
+                                        'accession': selected_cds.get('accession', 'Unknown'),
+                                        'protein_name': selected_cds.get('product', 'Unknown'),
+                                        'length': len(sequence),
+                                        'positions': f"{selected_cds.get('start_position', 0)}-{selected_cds.get('end_position', 0)}",
+                                        'is_reverse_translated': selected_cds.get('is_reverse_translated', False)
+                                    }
+                                    st.success("✅ Sequence sent! Check the 'Single Sequence' tab.")
+                                    st.rerun()
+                            
+                            with col_action3:
+                                # Download as FASTA
+                                fasta_content = f"{header}\n{sequence}"
+                                filename_suffix = "_RT" if selected_cds.get('is_reverse_translated') else ""
+                                st.download_button(
+                                    "💾 Download FASTA",
+                                    fasta_content,
+                                    file_name=f"{selected_cds.get('gene_name', 'cds')}_{selected_cds.get('accession', 'unknown')}{filename_suffix}.fasta",
+                                    mime="text/plain",
+                                    help="Download CDS sequence in FASTA format"
+                                )
+                            
+                            # Rest of your existing download/analysis code continues here...
+                            # (The comprehensive download data section)
+                            
+                        elif selected_cds.get('sequence') and not selected_cds.get('valid_dna'):
+                            st.warning("⚠️ This CDS contains invalid DNA characters and cannot be used for codon optimization.")
+                            st.text_area("Raw sequence (for reference only):", selected_cds['sequence'], height=100)
+                        
+                        else:
+                            st.error("❌ No sequence data available for this CDS feature.")
+                    
+                    else:
+                        st.error("❌ Invalid CDS selection. Please try again.")
                 
-                # Create comprehensive download data
-                st.markdown("#### 📊 Complete Analysis Report")
-                
-                # Create detailed DataFrame for download
-                cds_analysis_data = {
-                    'UniProt_Accession': [st.session_state.selected_uniprot_entry['accession']],
-                    'UniProt_Protein': [st.session_state.selected_uniprot_entry['protein_name']],
-                    'UniProt_Organism': [st.session_state.selected_uniprot_entry['organism']],
-                    'UniProt_Genes': [st.session_state.selected_uniprot_entry['gene_names']],
-                    'NCBI_Accession': [selected_cds.get('accession', '')],
-                    'CDS_Gene_Name': [selected_cds.get('gene_name', '')],
-                    'CDS_Product': [selected_cds.get('product', '')],
-                    'CDS_Locus_Tag': [selected_cds.get('locus_tag', '')],
-                    'CDS_Start_Position': [selected_cds.get('start_position', 0)],
-                    'CDS_End_Position': [selected_cds.get('end_position', 0)],
-                    'CDS_Length_bp': [selected_cds.get('length', 0)],
-                    'CDS_Sequence': [sequence],
-                    'CDS_Header': [header],
-                    'NCBI_URL': [selected_cds.get('url', '')],
-                    'UniProt_URL': [st.session_state.selected_uniprot_entry['uniprot_url']],
-                    'Valid_DNA': [selected_cds.get('valid_dna', False)],
-                    'Search_Query': [protein_query]
-                }
-                
-                analysis_df = pd.DataFrame(cds_analysis_data)
-                
-                # Download button for analysis
-                excel_data = create_download_link(analysis_df, f"CDS_Analysis_{selected_cds.get('gene_name', 'unknown')}.xlsx")
-                st.download_button(
-                    label="📥 Download Complete Analysis (Excel)",
-                    data=excel_data,
-                    file_name=f"CDS_Analysis_{selected_cds.get('gene_name', 'unknown')}_{selected_cds.get('accession', 'unknown')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    help="Download complete analysis including UniProt and NCBI information"
-                )
-            
-            elif selected_cds.get('sequence') and not selected_cds.get('valid_dna'):
-                st.warning("⚠️ This CDS contains invalid DNA characters and cannot be used for codon optimization.")
-                st.text_area("Raw sequence (for reference only):", selected_cds['sequence'], height=100)
-            
+                else:
+                    st.error("❌ No CDS options available.")
+
             else:
-                st.error("❌ No sequence data available for this CDS feature.")
-        
-        # Help section for new workflow
-        with st.expander("ℹ️ How to use the CDS Search", expanded=False):
-            st.markdown("""
-            **🎯 Targeted CDS Extraction Workflow:**
-            
-            **Step 1 - UniProt Search:**
-            - Search for proteins using descriptive terms
-            - Examples: "SARS-CoV-2 spike protein", "human insulin", "green fluorescent protein"
-            - UniProt provides comprehensive protein information and cross-references
-            
-            **Step 2 - Select Protein:**
-            - Choose the most relevant protein from the search results
-            - Review organism, gene names, and protein details
-            - Check for nucleotide database cross-references (EMBL/RefSeq)
-            
-            **Step 3 - Retrieve NCBI Data:**
-            - Automatically fetch the complete genomic/nucleotide record
-            - Parse GenBank format to extract all CDS features
-            - Identify coding sequences with their exact positions
-            
-            **Step 4 - Select Specific CDS:**
-            - Choose from all available CDS features in the record
-            - Each option shows: Gene name | Product | Positions | Length
-            - Example: "S | spike glycoprotein | 21563-25384 | 3822 bp"
-            
-            **Step 5 - Extract & Analyze:**
-            - Get the exact DNA sequence from the specified genomic positions
-            - Perform quick analysis (CAI, protein translation, +1 frame analysis)
-            - Transfer directly to Single Sequence Optimization
-            - Download FASTA or complete Excel analysis report
-            
-            **Key Features:**
-            - **Precise Extraction**: Gets exact CDS sequence from genomic positions
-            - **Multiple CDS Options**: Choose from all coding sequences in the record
-            - **Cross-Database Integration**: Links UniProt proteins to NCBI nucleotide data
-            - **Quality Validation**: Checks for valid DNA sequences before optimization
-            - **Seamless Transfer**: Direct integration with codon optimization tools
-            """) 
-    
+                # This shows when no CDS options are loaded yet
+                if st.session_state.get('mrna_selected_uniprot_entry'):
+                    st.info("👆 Choose a CDS source method above and click the corresponding button to load CDS options.")
     
     
     with tab6:
@@ -6020,19 +6245,31 @@ def main():
                     # Top row: CAI/GC and +1 Stop Pie Chart
                     col_chart1, col_chart2 = st.columns([3, 1])
 
+                    # Find this section in tab4 (mRNA Design):
                     with col_chart1:
                         st.markdown("##### CDS CAI and GC Content")
                         cai_result, cai_error = run_single_optimization(full_cds, "In-Frame Analysis")
                         if not cai_error and cai_result:
                             cai_df = pd.DataFrame(cai_result)
-                            fig_cai_gc = create_interactive_cai_gc_plot(
-                                cai_df['Position'].tolist(),
-                                cai_df['CAI_Weight'].tolist(),
-                                cai_df['Amino_Acid'].tolist(),
-                                full_cds,
-                                "Processed CDS"
+                            
+                            # Replace the existing chart with this:
+                            positions = cai_df['Position'].tolist()
+                            cai_weights = cai_df['CAI_Weight'].tolist()
+                            amino_acids = cai_df['Amino_Acid'].tolist()
+                            plus1_stop_positions = get_plus1_stop_positions(full_cds)
+                            minus1_stop_positions = get_minus1_stop_positions(full_cds)
+                            slippery_positions = get_slippery_motif_positions(full_cds)
+                            
+                            display_stateful_overlay_chart(
+                                positions=positions,
+                                cai_weights=cai_weights,
+                                amino_acids=amino_acids,
+                                sequence=full_cds,
+                                seq_name="Processed CDS",
+                                plus1_stop_positions=plus1_stop_positions,
+                                minus1_stop_positions=minus1_stop_positions,
+                                slippery_positions=slippery_positions
                             )
-                            st.plotly_chart(fig_cai_gc, use_container_width=True)
                         else:
                             st.warning("Could not generate CAI/GC plot.")
 
@@ -6444,23 +6681,33 @@ def main():
                         # CAI/GC Plot and +1 Stop Pie Chart
                         col_chart1, col_chart2 = st.columns([3, 1])
                         
+                        # Find this section in tab5 (Cancer Vaccine Design):
                         with col_chart1:
                             st.markdown("##### CDS CAI and GC Content")
-                            # The CAI plot should analyze the full coding sequence (SP + main CDS)
                             cai_result, cai_error = run_single_optimization(processed_cds, "In-Frame Analysis")
                             if not cai_error and cai_result:
                                 cai_df = pd.DataFrame(cai_result)
-                                fig_cai_gc = create_interactive_cai_gc_plot(
-                                    cai_df['Position'].tolist(),
-                                    cai_df['CAI_Weight'].tolist(),
-                                    cai_df['Amino_Acid'].tolist(),
-                                    processed_cds,
-                                    "Processed CDS"
+                                
+                                # Replace the existing chart with this:
+                                positions = cai_df['Position'].tolist()
+                                cai_weights = cai_df['CAI_Weight'].tolist()
+                                amino_acids = cai_df['Amino_Acid'].tolist()
+                                plus1_stop_positions = get_plus1_stop_positions(processed_cds)
+                                minus1_stop_positions = get_minus1_stop_positions(processed_cds)
+                                slippery_positions = get_slippery_motif_positions(processed_cds)
+                                
+                                display_stateful_overlay_chart(
+                                    positions=positions,
+                                    cai_weights=cai_weights,
+                                    amino_acids=amino_acids,
+                                    sequence=processed_cds,
+                                    seq_name="Processed CDS",
+                                    plus1_stop_positions=plus1_stop_positions,
+                                    minus1_stop_positions=minus1_stop_positions,
+                                    slippery_positions=slippery_positions
                                 )
-                                st.plotly_chart(fig_cai_gc, use_container_width=True, key="cancer_vaccine_cai_gc_plot")
                             else:
                                 st.warning("Could not generate CAI/GC plot.")
-                        
                             
                         with col_chart2:
                             st.markdown("##### CDS +1 Stop Codons")
@@ -6488,8 +6735,9 @@ def main():
 if __name__ == "__main__":
     main()
     
-    #Make it so all CAI graphs have the option to overlay +1,-1 and slippery sites
-    #Make it properly colourblind friendly - not all colours are safe 
+
+    
+    
     
     
 
