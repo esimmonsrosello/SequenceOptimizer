@@ -1,3 +1,8 @@
+#Match the mRNA design CDS search with the actual one
+#See if you can add a background image to the Streamlit app
+#See if i can make the AI bit more intelligent for making mRNA
+
+
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
@@ -1124,6 +1129,33 @@ def display_stateful_overlay_chart(positions, cai_weights, amino_acids, sequence
     # This creates a sandboxed iframe, isolating the chart's state from Streamlit.
     components.html(chart_html, height=550, scrolling=True)
 
+# Validation of final CDS (before adding UTRs)
+def validate_final_coding_sequence(full_coding_dna):
+    STANDARD_STOP_CODONS = {"TAA", "TAG", "TGA"}
+    problems = []
+
+    # 1. Check start codon
+    if not full_coding_dna.startswith("ATG"):
+        problems.append("⚠️ CDS does not start with an ATG start codon.")
+
+    # 2. Check for in-frame stop codons before the final codons
+    internal_sequence = full_coding_dna[:-6]  # Exclude last 2 codons (6 bases)
+    for i in range(0, len(internal_sequence) - 2, 3):
+        codon = internal_sequence[i:i+3]
+        if codon in STANDARD_STOP_CODONS:
+            problems.append(f"❌ Premature stop codon ({codon}) found at position {i+1}-{i+3}.")
+            break
+
+    # 3. Check if it ends with exactly two stop codons (no more, no less)
+    final_codons = [full_coding_dna[-6:-3], full_coding_dna[-3:]]
+    if not all(c in STANDARD_STOP_CODONS for c in final_codons):
+        problems.append(f"❌ Final two codons are not valid stop codons: {final_codons}")
+    elif len(full_coding_dna) >= 9:
+        third_last_codon = full_coding_dna[-9:-6]
+        if third_last_codon in STANDARD_STOP_CODONS:
+            problems.append(f"❌ More than two stop codons at the end. Found extra stop codon before the final two: {third_last_codon}")
+
+    return problems
 
 
 def create_interactive_cai_slippery_plot(positions, cai_weights, amino_acids, slippery_positions, seq_name, color='#4ECDC4'):
@@ -6140,6 +6172,18 @@ def main():
                         # If there's no stop codon, append the selected double stop
                         cds_with_stops = full_cds + (selected_stop_codon * 2)
                         st.info(f"Added selected double stop codon: {selected_stop_codon * 2}")
+                        # ✅ Run validation on the final full CDS before adding UTRs
+                        validation_problems = validate_final_coding_sequence(cds_with_stops)
+
+                        st.subheader("🧪 mRNA Design Validation")
+                        if validation_problems:
+                            for problem in validation_problems:
+                                st.error(problem)
+                            st.warning("⚠️ Please fix the issues above before using this mRNA sequence in production.")
+                        else:
+                            st.success("✅ CDS passed all validation checks: proper start codon, no internal stops, ends with exactly two stop codons.")
+
+                    
 
                     # Step 5: Assemble and display the final mRNA sequence
                     final_mrna_sequence = JT_5_UTR + cds_with_stops + JT_3_UTR
@@ -6734,6 +6778,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
+    
     
 
     
