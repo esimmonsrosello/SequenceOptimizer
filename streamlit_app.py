@@ -1,7 +1,3 @@
-#Match the mRNA design CDS search with the actual one
-#See if you can add a background image to the Streamlit app
-#See if i can make the AI bit more intelligent for making mRNA
-
 
 import streamlit as st
 import streamlit.components.v1 as components
