@@ -5330,34 +5330,17 @@ def main():
         st.markdown("""
         ### DNA Codon Optimization Tool v2.5
         
-        This professional bioinformatics application provides comprehensive DNA sequence optimization and analysis capabilities with enhanced multi-database search functionality.
+        This bioinformatics application provides comprehensive DNA sequence optimization and analysis capabilities, allowing for sequences not prone to +1 ribosomal frameshfting.
         
         **Available Methods:**
-        - **Standard Codon Optimization**: Uses most frequent codons for each amino acid
+        
         - **In-Frame Analysis**: Calculates Codon Adaptation Index for sequence assessment with interactive 10bp GC content window
+        - **+1 Frame Analysis**: Comprehensive analysis including slippery motifs and frame analysis with interactive visualizations
+        - **Standard Codon Optimization**: Uses most frequent codons for each amino acid            
         - **Balanced Optimization**: Advanced algorithm considering codon usage and +1 frame effects
         - **MaxStop**: Specialized for alternative reading frame stop codon creation
         
-        - **+1 Frame Analysis**: Comprehensive analysis including slippery motifs and frame analysis with interactive visualizations
-
-        **Enhanced Features in v2.5:**
-        - **Interactive Visualizations**: All charts now use Plotly for interactive exploration
-        - **10bp GC Content Window**: Added real-time GC content analysis in sliding windows for In-Frame Analysis
-        - **Dual-Axis Plots**: CAI weights and GC content displayed simultaneously with hover details
-        - **Interactive Batch Charts**: Hover, zoom, and explore batch analysis results
-        - **Enhanced Copy Functionality**: Improved sequence copying with better UX
-        - **Consistent Color Schemes**: Professional two-shade palette throughout the application
-
-        **Research & Database Features:**
-        - **Patent Search**: AI-powered search of Google Patents for molecular biology technologies
-        - **NCBI CDS Extraction**: Automated search and extraction of coding sequences from NCBI
-        - **UniProt Integration**: Search protein database and retrieve linked nucleotide sequences
-        - **Multi-Database Search**: Simultaneous search across NCBI and UniProt databases
-        - **AI-Powered Analysis**: Anthropic Claude integration for intelligent sequence ranking
-        - **Cross-Reference Mining**: Automatic retrieval of nucleotide sequences from protein databases
-        - **Comprehensive Export**: Professional Excel files with multiple sheets and metadata
-        
-        **Interactive Features:**
+         **Interactive Features:**
         - **Hover Information**: Detailed tooltips on all charts showing exact values
         - **Zoom and Pan**: Interactive exploration of large datasets
         - **Click to Select**: Interactive data point selection where applicable
@@ -5367,50 +5350,10 @@ def main():
         **Core Features:**
         - Single sequence and batch processing
         - Result accumulation and export
-        - Professional Excel output with formatting
         - Real-time validation and feedback
         - Configurable algorithm parameters
-        - Multi-source sequence integration
-        - Quote-based filtering for precise searches
         
-        **Database Coverage:**
-        - **NCBI**: Direct access to nucleotide sequences and CDS features
-        - **UniProt**: Protein sequences with nucleotide cross-references
-        - **EMBL**: European nucleotide database integration
-        - **RefSeq**: Reference sequence collection
-        - **Google Patents**: Intellectual property and technology search
         
-        **API Requirements:**
-        - SERPER API key for Google-based searches (NCBI, Patents)
-        - Anthropic API key for AI analysis (optional but recommended)
-        - UniProt REST API (free, no key required)
-        
-        **API Configuration:**
-        Create a `.env` file in your application directory:
-        ```
-        SERPER_API_KEY=your_serper_api_key_here
-        ANTHROPIC_API=your_anthropic_api_key_here
-        ```
-        
-        **Version History:**
-        - **v2.5**: Interactive visualizations, 10bp GC window analysis, enhanced user experience
-        - **v2.4**: Enhanced patent search with sequence extraction, breakdown charts, simplified stats
-        - **v2.3**: Unified batch CAI display, enhanced GC integration, slippery sites visualization
-        - **v2.2**: Two-pass search strategy, intelligent result caching, seamless sequence transfer
-        - **v2.1**: Consolidated search interface, smart quote filtering, enhanced CDS annotation
-        - **v2.0**: UniProt integration, multi-database support, AI ranking, cross-reference mining
-        
-        **Use Cases:**
-        - **Targeted CDS Search**: Find specific proteins like "spike protein" or "insulin"
-        - **Comparative Genomics**: Find homologous sequences across species
-        - **Codon Optimization Projects**: Source sequences for optimization workflows
-        - **Protein Expression Research**: Find coding sequences for cloning
-        - **Patent Research**: Discover existing technologies and extract sequences
-        - **Sequence Analysis Pipelines**: Integrate with existing bioinformatics workflows
-        - **Educational Research**: Access curated biological sequence data
-        - **Interactive Data Exploration**: Explore sequence properties with interactive tools
-        
-        **Version:** Streamlit v2.5 (Interactive Visualizations & Enhanced Analysis)
         """)
 
    # with tab4:
@@ -6500,5 +6443,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
+    
     
     
