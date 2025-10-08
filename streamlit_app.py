@@ -4196,43 +4196,56 @@ def main():
             )
         
         with col2:
-            optimization_method = st.selectbox(
-    "Choose Optimization Method",
-    [
-        "In-Frame Analysis",           # 1st
-        "+1 Frame Analysis",           # 2nd
-        "Standard Codon Optimization", # 3rd
-        "MaxStop",  # 4th
-        "Balanced Optimization",       # 5th
-       
-    ],
-    help="Choose the optimization algorithm to apply"
-)
-            
+            operation_type = st.radio(
+                "Choose Operation Type",
+                ("Optimization", "Analysis"),
+                key="single_op_type"
+            )
+
+            if operation_type == "Optimization":
+                method_to_run = st.selectbox(
+                    "Choose Optimization Method",
+                    [
+                        "Standard Codon Optimization",
+                        "MaxStop",
+                        "Balanced Optimization",
+                    ],
+                    help="Choose the optimization algorithm to apply"
+                )
+            else:  # Analysis
+                method_to_run = st.selectbox(
+                    "Choose Analysis Method",
+                    [
+                        "In-Frame Analysis",
+                        "+1 Frame Analysis",
+                    ],
+                    help="Choose the analysis algorithm to apply"
+                )
+
             # Accumulation settings moved here
             st.markdown("**Result Management:**")
             accumulate_results = st.checkbox(
-                "Accumulate Results", 
+                "Accumulate Results",
                 help="Collect multiple single-sequence results before download",
                 key="accumulate_results_tab1"
             )
-            
+
             if st.session_state.accumulated_results:
                 st.info(f"Accumulated: {len(st.session_state.accumulated_results)} results")
                 if st.button("Clear Accumulated Results", key="clear_accumulated_tab1"):
                     st.session_state.accumulated_results = []
                     st.session_state.run_counter = 0
                     st.rerun()
-            
-            run_optimization_button = st.button("Run Optimization", type="primary")
-        
+
+            run_button = st.button(f"Run {operation_type}", type="primary")
+
         # Results section - using full width outside of columns
-        if run_optimization_button:
+        if run_button:
             if not sequence_input.strip():
                 st.error("Please enter a DNA sequence")
             else:
                 with st.spinner("Processing sequence..."):
-                    result, error = run_single_optimization(sequence_input, optimization_method, bias_weight)
+                    result, error = run_single_optimization(sequence_input, method_to_run, bias_weight)
                 
                 if error:
                     st.error(f"Error: {error}")
@@ -4243,7 +4256,7 @@ def main():
                     st.divider()
                     
                     # Display results using full page width
-                    if optimization_method == "In-Frame Analysis":
+                    if method_to_run == "In-Frame Analysis":
                         df = pd.DataFrame(result)
                         st.subheader("In-Frame Analysis Results")
                         
@@ -4305,7 +4318,7 @@ def main():
                         with st.expander("View Detailed In-Frame Data"):
                             st.dataframe(df, use_container_width=True)
                         
-                    elif optimization_method == "+1 Frame Analysis":
+                    elif method_to_run == "+1 Frame Analysis":
                         st.subheader("+1 Frame Analysis Results")
                         
                         # Load immunogenic peptides
@@ -4510,7 +4523,7 @@ def main():
                     else:
                         # Standard optimization results
                         # Define the definitive optimized sequence FIRST to ensure consistency
-                        if optimization_method == "MaxStop" and 'maxstop_result_seq' in st.session_state:
+                        if method_to_run == "MaxStop" and 'maxstop_result_seq' in st.session_state:
                             optimized_seq = st.session_state['maxstop_result_seq']
                         else:
                             optimized_seq = result.get('Optimized_DNA', sequence_input)
@@ -4733,19 +4746,33 @@ def main():
             if sequences:
                 st.success(f"Loaded {len(sequences)} sequences")
                 
-                batch_method = st.selectbox(
-    "Batch Optimization Method",
-    [
-        "In-Frame Analysis",           # 1st
-        "+1 Frame Analysis",           # 2nd
-        "Standard Codon Optimization", # 3rd
-        "MaxStop",  # 4th
-        "Balanced Optimization",       # 5th
-        
-    ]
-)
-                
-                if st.button("Process Batch", type="primary"):
+                batch_operation_type = st.radio(
+                    "Choose Operation Type",
+                    ("Analysis", "Optimization"),
+                    key="batch_op_type"
+                )
+
+                if batch_operation_type == "Analysis":
+                    batch_method = st.selectbox(
+                        "Batch Analysis Method",
+                        [
+                            "In-Frame Analysis",
+                            "+1 Frame Analysis",
+                        ],
+                        help="Choose the analysis algorithm to apply to the batch"
+                    )
+                else:  # Optimization
+                    batch_method = st.selectbox(
+                        "Batch Optimization Method",
+                        [
+                            "Standard Codon Optimization",
+                            "MaxStop",
+                            "Balanced Optimization",
+                        ],
+                        help="Choose the optimization algorithm to apply to the batch"
+                    )
+
+                if st.button(f"Process Batch with {batch_operation_type}", type="primary"):
                     progress_bar = st.progress(0)
                     status_text = st.empty()
                     results = []
@@ -5755,6 +5782,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
     
     
     
