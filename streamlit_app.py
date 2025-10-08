@@ -17,6 +17,9 @@ from dotenv import load_dotenv
 from typing import List, Dict
 from anthropic import Anthropic
 from datetime import datetime
+from Bio.Data import CodonTable
+
+
 
 # Configure page
 st.set_page_config(
@@ -218,6 +221,11 @@ STANDARD_GENETIC_CODE = {
 synonymous_codons = defaultdict(list)
 for codon_val, aa_val in STANDARD_GENETIC_CODE.items(): 
     synonymous_codons[aa_val].append(codon_val)
+
+# Synonymous Codons (Mapping AA -> List[Codon]) - This is the codon_table equivalent
+NC_synonymous_codons = defaultdict(list)
+for codon, aa in STANDARD_GENETIC_CODE.items():
+    NC_synonymous_codons[aa].append(codon)
     
 FIRST_AA_CANDIDATES = ['L', 'I', 'V']
 SECOND_AA_CANDIDATES = ['V', 'I']
@@ -1864,62 +1872,14 @@ def balanced_optimisation(dna_seq, bias_weight_input=None):
     
     return optimised_seq
 
-def nc_stop_codon_optimisation(dna_seq):
-    """MaxStop"""
-    dna_seq_upper = dna_seq.upper()
-    genetic_code = st.session_state.genetic_code
-    
-    protein_str = ""
-    for i in range(0, len(dna_seq_upper) - 2, 3):
-        codon = dna_seq_upper[i:i+3]
-        protein_str += genetic_code.get(codon, str(Seq(codon).translate()))
+standard_table = CodonTable.unambiguous_dna_by_id[1]
+synonymous_codons = defaultdict(list)
+for codon, aa in standard_table.forward_table.items():
+    synonymous_codons[aa].append(codon)
+for stop in standard_table.stop_codons:
+    synonymous_codons["*"].append(stop)
 
-    synonymous_codons_local = defaultdict(list)
-    for c, aa_val in genetic_code.items():
-        synonymous_codons_local[aa_val].append(c)
-    
-    optimised_seq = ""
-    idx = 0
-    while idx < len(dna_seq_upper) - 2:
-        codon_val = dna_seq_upper[idx:idx+3]
-        aa = genetic_code.get(codon_val, str(Seq(codon_val).translate()))
 
-        if idx < len(dna_seq_upper) - 5:  # Try double substitution
-            codon2 = dna_seq_upper[idx+3:idx+6]
-            aa2 = genetic_code.get(codon2, str(Seq(codon2).translate()))
-            if aa in synonymous_codons_local and aa2 in synonymous_codons_local:
-                double_subs_orig_check = [(c1, c2) for c1 in synonymous_codons_local[aa] 
-                                        for c2 in synonymous_codons_local[aa2] 
-                                        if (c1 + c2)[1:7] in {"TAATAA", "TAGTAG"}]
-                if double_subs_orig_check:
-                    best_c1, best_c2 = double_subs_orig_check[0]
-                    optimised_seq += best_c1 + best_c2
-                    idx += 6
-                    continue
-        
-        best_codon_val = codon_val
-        # For single codon, check if any synonym creates TAA or TAG in +1 frame
-        if idx + 3 < len(dna_seq_upper):
-            next_actual_codon = dna_seq_upper[idx+3:idx+6]
-            for syn_c in synonymous_codons_local.get(aa, []):
-                plus1_codon = syn_c[1:3] + next_actual_codon[0:1]
-                if plus1_codon in {"TAA", "TAG"}:
-                    best_codon_val = syn_c
-                    break
-        optimised_seq += best_codon_val
-        idx += 3
-
-    # Verify protein sequence unchanged
-    final_protein_str = ""
-    for i in range(0, len(optimised_seq) - 2, 3):
-        codon = optimised_seq[i:i+3]
-        final_protein_str += genetic_code.get(codon, str(Seq(codon).translate()))
-
-    if final_protein_str != protein_str:
-        logger.error("Protein sequence changed in nc_stop_codon_optimisation!")
-        return dna_seq_upper
-    
-    return optimised_seq
 
 def third_aa_has_A_G_synonymous(aa):
     """Check if amino acid has synonymous codons starting with A or G"""
@@ -3375,6 +3335,431 @@ def create_download_link(df, filename):
     processed_data = output.getvalue()
     return processed_data
 
+def run_terminal_maxstop(dna_seq):
+    """
+    A self-contained implementation of the user's terminal script logic for MaxStop.
+    This uses its own BioPython-derived codon table and is completely isolated
+    from the Streamlit app's session state and codon files for debugging.
+    """
+    # 1. Imports and Data setup (local to this function)
+    from collections import defaultdict
+    from Bio.Seq import Seq
+    from Bio.Data import CodonTable
+
+    standard_table = CodonTable.unambiguous_dna_by_id[1]
+    synonymous_codons = defaultdict(list)
+    for codon, aa in standard_table.forward_table.items():
+        synonymous_codons[aa].append(codon)
+    for stop in standard_table.stop_codons:
+        synonymous_codons["*"].append(stop)
+
+    # 2. The user's optimization function (renamed to avoid conflicts)
+    def terminal_stop_codon_optimisation(seq_to_optimize):
+        seq_to_optimize = seq_to_optimize.upper().replace("\n", "").replace(" ", "")
+        original_seq_obj = Seq(seq_to_optimize)
+        protein = original_seq_obj.translate(to_stop=False)
+
+        optimised_seq = ""
+        i = 0
+        while i < len(seq_to_optimize) - 2:
+            codon = seq_to_optimize[i:i+3]
+            try:
+                aa_seq = Seq(codon).translate()
+                aa = str(aa_seq)
+            except Exception:
+                optimised_seq += codon
+                i += 3
+                continue
+
+            # This check is buggy, but we keep it to match the terminal script
+            if i < len(seq_to_optimize) - 5:
+                codon2 = seq_to_optimize[i+3:i+6]
+                try:
+                    aa2_seq = Seq(codon2).translate()
+                    aa2 = str(aa2_seq)
+                    double_subs = [
+                        (c1, c2) for c1 in synonymous_codons[aa]
+                                 for c2 in synonymous_codons[aa2]
+                                 if (c1 + c2)[1:7] in {"TAATAA", "TAGTAG"}
+                    ]
+                    if double_subs:
+                        best_c1, best_c2 = double_subs[0]
+                        optimised_seq += best_c1 + best_c2
+                        i += 6
+                        continue
+                except Exception:
+                    pass
+
+            best_codon = codon
+            for syn in synonymous_codons[aa]:
+                temp_seq = optimised_seq + syn + seq_to_optimize[i+3:]
+                plus1 = temp_seq[1:]
+                codon_in_plus1 = plus1[i:i+3]
+                if codon_in_plus1 in {"TAA", "TAG"}:
+                    best_codon = syn
+                    break
+            optimised_seq += best_codon
+            i += 3
+        
+        if i < len(seq_to_optimize):
+            optimised_seq += seq_to_optimize[i:]
+
+        try:
+            final_protein = Seq(optimised_seq).translate(to_stop=False)
+            assert str(final_protein) == str(protein)
+        except AssertionError:
+            try:
+                logger.error("Protein sequence changed during isolated MaxStop. Reverting.")
+            except NameError:
+                print("ERROR: Protein sequence changed during isolated MaxStop. Reverting.")
+            return seq_to_optimize
+        return optimised_seq
+
+    # 3. Run the logic
+    optimised_dna = terminal_stop_codon_optimisation(dna_seq)
+
+    # Save the correct result directly to session state to bypass any state corruption issues
+    st.session_state['maxstop_result_seq'] = optimised_dna
+    
+    return optimised_dna
+
+def nc_stop_codon_optimisation(dna_seq, codon_table=NC_synonymous_codons):
+    """
+    MaxStop NC stop codon optimisation for Streamlit.
+    Optimized for consistency using defined global codon tables.
+    """
+    dna_seq = dna_seq.upper().replace("\n", "").replace(" ", "")
+    
+    # Use Biopython's translation for the original protein sequence
+    original_seq = Seq(dna_seq)
+    protein = original_seq.translate(to_stop=False)
+
+    optimised_seq = ""
+    i = 0
+    while i < len(dna_seq) - 2:
+        codon = dna_seq[i:i+3]
+        
+        # Determine the AA using the STANDARD_GENETIC_CODE map for consistency
+        # Fallback to '*' for stop codons/errors, though the main translation should catch this
+        aa = STANDARD_GENETIC_CODE.get(codon, str(Seq(codon).translate()))
+
+        # --- Check for consecutive stop codon motifs ---
+        if i < len(dna_seq) - 5:
+            codon2 = dna_seq[i+3:i+6]
+            aa2 = STANDARD_GENETIC_CODE.get(codon2, str(Seq(codon2).translate()))
+            
+            # Use the provided codon_table (defaulting to NC_synonymous_codons)
+            syns1 = codon_table.get(aa, [])
+            syns2 = codon_table.get(aa2, [])
+
+            double_subs = [
+                (c1, c2) for c1 in syns1
+                         for c2 in syns2
+                         # Check for +1 frame stop codon motifs (TAATAA, TAGTAG)
+                         if (c1 + c2)[1:7] in {"TAATAA", "TAGTAG"}
+            ]
+            
+            if double_subs:
+                best_c1, best_c2 = double_subs[0]
+                optimised_seq += best_c1 + best_c2
+                i += 6
+                continue
+
+        # --- Check for single +1 stop codon bias ---
+        best_codon = codon
+        synonyms = codon_table.get(aa, [])
+        
+        for syn in synonyms:
+            # Construct a temporary sequence for the +1 frame check
+            temp_seq = optimised_seq + syn + dna_seq[i+3:]
+            
+            # Get the +1 reading frame (starting from the second base)
+            plus1 = temp_seq[1:]
+            
+            # Get the codon in the +1 frame at the current position 'i'
+            codon_in_plus1 = plus1[i:i+3]
+            
+            # The logic: use the first synonym found that *creates* a TAA or TAG in the +1 frame
+            if codon_in_plus1 in {"TAA", "TAG"}:
+                best_codon = syn
+                break
+
+        optimised_seq += best_codon
+        i += 3
+
+    # --- Verify protein unchanged (Crucial Check) ---
+    final_protein = Seq(optimised_seq).translate(to_stop=False)
+    assert str(final_protein) == str(protein), "Protein sequence changed! Check AA translation logic."
+
+    return optimised_seq
+
+def isolated_maxstop_from_terminal(dna_seq_input):
+    """
+    A completely isolated, copy-pasted version of the user's terminal script.
+    All variables and functions are local to this scope to prevent any clashes.
+    It takes a DNA sequence and returns the optimized version.
+    """
+    # --- Start of user's copy-pasted code ---
+    from collections import defaultdict
+    from Bio.Seq import Seq
+    from Bio.Data import CodonTable
+
+    # Renamed to avoid global clashes
+    terminal_standard_table = CodonTable.unambiguous_dna_by_id[1]
+    terminal_synonymous_codons = defaultdict(list)
+    for codon, aa in terminal_standard_table.forward_table.items():
+        terminal_synonymous_codons[aa].append(codon)
+    for stop in terminal_standard_table.stop_codons:
+        terminal_synonymous_codons["*"].append(stop)
+
+    # Renamed to avoid global clashes
+    def terminal_stop_codon_optimisation(dna_seq):
+        dna_seq = dna_seq.upper()
+        original_seq = Seq(dna_seq)
+        protein = original_seq.translate(to_stop=False)
+
+        optimised_seq = ""
+        i = 0
+        while i < len(dna_seq) - 2:
+            codon = dna_seq[i:i+3]
+            try:
+                aa = str(Seq(codon).translate())
+            except Exception:
+                optimised_seq += codon
+                i += 3
+                continue
+            
+            # consecutive stop codons (buggy, but preserved)
+            if i < len(dna_seq) - 5:
+                codon2 = dna_seq[i+3:i+6]
+                try:
+                    aa2 = str(Seq(codon2).translate())
+                    double_subs = [
+                        (c1, c2) for c1 in terminal_synonymous_codons[aa]
+                                 for c2 in terminal_synonymous_codons[aa2]
+                                 if (c1 + c2)[1:7] in {"TAATAA", "TAGTAG"}
+                    ]
+                    if double_subs:
+                        best_c1, best_c2 = double_subs[0]
+                        optimised_seq += best_c1 + best_c2
+                        i += 6
+                        continue
+                except Exception:
+                    pass
+
+            # single stop codon addition; bias for UAA and UAG
+            best_codon = codon
+            for syn in terminal_synonymous_codons[aa]:
+                temp_seq = optimised_seq + syn + dna_seq[i+3:]
+                plus1 = temp_seq[1:]
+                codon_in_plus1 = plus1[i:i+3]
+                if codon_in_plus1 in {"TAA", "TAG"}:
+                    best_codon = syn
+                    break
+            optimised_seq += best_codon
+            i += 3
+
+        if i < len(dna_seq):
+            optimised_seq += dna_seq[i:]
+
+        # ensures aa composition is the unchanged
+        try:
+            final_protein = Seq(optimised_seq).translate(to_stop=False)
+            assert str(final_protein) == str(protein)
+        except AssertionError:
+            # This part is not in the user's script, but good practice for the app
+            return dna_seq
+
+        return optimised_seq
+
+    # The user's script uses a hardcoded DNA string.
+    # We will use the sequence passed into this function instead.
+    optimised_dna = terminal_stop_codon_optimisation(dna_seq_input)
+    # --- End of user's copy-pasted code ---
+    
+    # Save the correct result directly to session state to bypass any state corruption issues
+    st.session_state['maxstop_result_seq'] = optimised_dna
+    
+    return optimised_dna
+
+def isolated_maxstop_from_terminal(dna_seq_input):
+    """
+    A completely isolated, copy-pasted version of the user's terminal script.
+    All variables and functions are local to this scope to prevent any clashes.
+    It takes a DNA sequence and returns the optimized version.
+    """
+    # --- Start of user's copy-pasted code ---
+    from collections import defaultdict
+    from Bio.Seq import Seq
+    from Bio.Data import CodonTable
+
+    # Renamed to avoid global clashes
+    terminal_standard_table = CodonTable.unambiguous_dna_by_id[1]
+    terminal_synonymous_codons = defaultdict(list)
+    for codon, aa in terminal_standard_table.forward_table.items():
+        terminal_synonymous_codons[aa].append(codon)
+    for stop in terminal_standard_table.stop_codons:
+        terminal_synonymous_codons["*"].append(stop)
+
+    # Renamed to avoid global clashes
+    def terminal_stop_codon_optimisation(dna_seq):
+        dna_seq = dna_seq.upper()
+        original_seq = Seq(dna_seq)
+        protein = original_seq.translate(to_stop=False)
+
+        optimised_seq = ""
+        i = 0
+        while i < len(dna_seq) - 2:
+            codon = dna_seq[i:i+3]
+            try:
+                aa = str(Seq(codon).translate())
+            except Exception:
+                optimised_seq += codon
+                i += 3
+                continue
+            
+            # consecutive stop codons (buggy, but preserved)
+            if i < len(dna_seq) - 5:
+                codon2 = dna_seq[i+3:i+6]
+                try:
+                    aa2 = str(Seq(codon2).translate())
+                    double_subs = [
+                        (c1, c2) for c1 in terminal_synonymous_codons[aa]
+                                 for c2 in terminal_synonymous_codons[aa2]
+                                 if (c1 + c2)[1:7] in {"TAATAA", "TAGTAG"}
+                    ]
+                    if double_subs:
+                        best_c1, best_c2 = double_subs[0]
+                        optimised_seq += best_c1 + best_c2
+                        i += 6
+                        continue
+                except Exception:
+                    pass
+
+            # single stop codon addition; bias for UAA and UAG
+            best_codon = codon
+            for syn in terminal_synonymous_codons[aa]:
+                temp_seq = optimised_seq + syn + dna_seq[i+3:]
+                plus1 = temp_seq[1:]
+                codon_in_plus1 = plus1[i:i+3]
+                if codon_in_plus1 in {"TAA", "TAG"}:
+                    best_codon = syn
+                    break
+            optimised_seq += best_codon
+            i += 3
+
+        if i < len(dna_seq):
+            optimised_seq += dna_seq[i:]
+
+        # ensures aa composition is the unchanged
+        try:
+            final_protein = Seq(optimised_seq).translate(to_stop=False)
+            assert str(final_protein) == str(protein)
+        except AssertionError:
+            # This part is not in the user's script, but good practice for the app
+            return dna_seq
+
+        return optimised_seq
+
+    # The user's script uses a hardcoded DNA string.
+    # We will use the sequence passed into this function instead.
+    optimised_dna = terminal_stop_codon_optimisation(dna_seq_input)
+    # --- End of user's copy-pasted code ---
+    
+    # Save the correct result directly to session state to bypass any state corruption issues
+    st.session_state['maxstop_result_seq'] = optimised_dna
+    
+    return optimised_dna
+
+def isolated_maxstop_from_terminal(dna_seq_input):
+    """
+    A completely isolated, copy-pasted version of the user's terminal script.
+    All variables and functions are local to this scope to prevent any clashes.
+    It takes a DNA sequence and returns the optimized version.
+    """
+    # --- Start of user's copy-pasted code ---
+    from collections import defaultdict
+    from Bio.Seq import Seq
+    from Bio.Data import CodonTable
+
+    # Renamed to avoid global clashes
+    terminal_standard_table = CodonTable.unambiguous_dna_by_id[1]
+    terminal_synonymous_codons = defaultdict(list)
+    for codon, aa in terminal_standard_table.forward_table.items():
+        terminal_synonymous_codons[aa].append(codon)
+    for stop in terminal_standard_table.stop_codons:
+        terminal_synonymous_codons["*"].append(stop)
+
+    # Renamed to avoid global clashes
+    def terminal_stop_codon_optimisation(dna_seq):
+        dna_seq = dna_seq.upper()
+        original_seq = Seq(dna_seq)
+        protein = original_seq.translate(to_stop=False)
+
+        optimised_seq = ""
+        i = 0
+        while i < len(dna_seq) - 2:
+            codon = dna_seq[i:i+3]
+            try:
+                aa = str(Seq(codon).translate())
+            except Exception:
+                optimised_seq += codon
+                i += 3
+                continue
+            
+            # consecutive stop codons (buggy, but preserved)
+            if i < len(dna_seq) - 5:
+                codon2 = dna_seq[i+3:i+6]
+                try:
+                    aa2 = str(Seq(codon2).translate())
+                    double_subs = [
+                        (c1, c2) for c1 in terminal_synonymous_codons[aa]
+                                 for c2 in terminal_synonymous_codons[aa2]
+                                 if (c1 + c2)[1:7] in {"TAATAA", "TAGTAG"}
+                    ]
+                    if double_subs:
+                        best_c1, best_c2 = double_subs[0]
+                        optimised_seq += best_c1 + best_c2
+                        i += 6
+                        continue
+                except Exception:
+                    pass
+
+            # single stop codon addition; bias for UAA and UAG
+            best_codon = codon
+            for syn in terminal_synonymous_codons[aa]:
+                temp_seq = optimised_seq + syn + dna_seq[i+3:]
+                plus1 = temp_seq[1:]
+                codon_in_plus1 = plus1[i:i+3]
+                if codon_in_plus1 in {"TAA", "TAG"}:
+                    best_codon = syn
+                    break
+            optimised_seq += best_codon
+            i += 3
+
+        if i < len(dna_seq):
+            optimised_seq += dna_seq[i:]
+
+        # ensures aa composition is the unchanged
+        try:
+            final_protein = Seq(optimised_seq).translate(to_stop=False)
+            assert str(final_protein) == str(protein)
+        except AssertionError:
+            # This part is not in the user's script, but good practice for the app
+            return dna_seq
+
+        return optimised_seq
+
+    # The user's script uses a hardcoded DNA string.
+    # We will use the sequence passed into this function instead.
+    optimised_dna = terminal_stop_codon_optimisation(dna_seq_input)
+    # --- End of user's copy-pasted code ---
+    
+    # Save the correct result directly to session state to bypass any state corruption issues
+    st.session_state['maxstop_result_seq'] = optimised_dna
+    
+    return optimised_dna
+
 def run_single_optimization(sequence, method, bias_weight=None):
     """Run single sequence optimization"""
     is_valid, clean_seq, error_msg = validate_dna_sequence(sequence)
@@ -3416,13 +3801,16 @@ def run_single_optimization(sequence, method, bias_weight=None):
                 'Method': method
             }
         elif method == "MaxStop":
-            optimized = nc_stop_codon_optimisation(clean_seq)
+            # Clear any previous result from the session state before running
+            if 'maxstop_result_seq' in st.session_state:
+                del st.session_state['maxstop_result_seq']
+            optimized = isolated_maxstop_from_terminal(clean_seq)
             weights, _ = get_codon_weights_row(optimized)
             result = {
                 'Original_DNA': clean_seq,
                 'Protein': protein_seq,
                 'Optimized_DNA': optimized,
-                'CAI_Weights': ','.join(f"{w:.4f}" for w in weights),
+                'CAI_Weights': ', '.join(f"{w:.4f}" for w in weights),
                 'Method': method
             }
         #elif method == "JT Plus1 Stop Optimization":
@@ -4121,21 +4509,24 @@ def main():
                         
                     else:
                         # Standard optimization results
+                        # Define the definitive optimized sequence FIRST to ensure consistency
+                        if optimization_method == "MaxStop" and 'maxstop_result_seq' in st.session_state:
+                            optimized_seq = st.session_state['maxstop_result_seq']
+                        else:
+                            optimized_seq = result.get('Optimized_DNA', sequence_input)
+
                         st.subheader("Optimization Results")
                         
                         # Show sequence comparison for optimization methods using full width
                         if 'Optimized_DNA' in result:
                             st.subheader("Sequence Comparison")
                             
-                            
-                            
                             seq_col1, seq_col2 = st.columns(2)
                             
                             with seq_col1:
                                 display_copyable_sequence(result['Original_DNA'], "Original Sequence", "orig")
                             with seq_col2:
-                                display_copyable_sequence(result['Optimized_DNA'], "Optimized Sequence", "opt")
-                            
+                                display_copyable_sequence(optimized_seq, "Optimized Sequence", "opt") # Use the consistent variable
                             
                         else:
                             # For methods without optimization (like pure analysis)
@@ -4146,9 +4537,6 @@ def main():
                             
                             result_df = pd.DataFrame(result_data)
                             st.dataframe(result_df, use_container_width=True)
-                            
-                         # Use optimized sequence if available, otherwise fallback to original
-                        optimized_seq = result['Optimized_DNA'] if 'Optimized_DNA' in result else sequence_input
 
                         # +1 Frame Stop Codon Distribution
                         with st.expander("🥧 +1 Frame Stop Codon Distribution", expanded=False):
@@ -4361,7 +4749,6 @@ def main():
                     progress_bar = st.progress(0)
                     status_text = st.empty()
                     results = []
-                    
                     for i, (name, seq) in enumerate(sequences):
                         status_text.text(f"Processing {name}...")
                         progress_bar.progress((i + 1) / len(sequences))
@@ -4372,6 +4759,11 @@ def main():
                         else:
                             result_with_name = result.copy()
                             result_with_name['Sequence_Name'] = name
+                            
+                            # For MaxStop, overwrite the Optimized_DNA with the guaranteed correct one from session_state
+                            if batch_method == "MaxStop" and 'maxstop_result_seq' in st.session_state:
+                                result_with_name['Optimized_DNA'] = st.session_state['maxstop_result_seq']
+
                             results.append(result_with_name)
                     
                     status_text.text("I'M DONE! Processing complete.")
@@ -5363,6 +5755,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
+    
     
     
     
