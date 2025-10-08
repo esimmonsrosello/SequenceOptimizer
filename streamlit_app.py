@@ -3954,7 +3954,7 @@ def main():
         st.session_state.uniprot_engine = UniProtSearchEngine()
         
     st.title("🐎 Harmonized Optimization of Oligos and Frames")
-    st.markdown("Welcome to HOOF: your DNA sequence optimization and analysis companion!")
+    st.markdown("Welcome to HOOF: your optimization and analysis companion!")
 
     with st.expander("Read Me"):
         st.markdown('''
