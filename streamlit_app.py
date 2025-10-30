@@ -1494,163 +1494,192 @@ def balanced_optimisation(dna_seq, bias_weight_input=None):
     
     return optimised_seq
 
-def MaxStop(dna_seq, debug=False):
-    dna_seq = dna_seq.upper()
-    original_seq = Seq(dna_seq)
-    protein = str(original_seq.translate(to_stop=False))
+def MaxStop(dna_seq):
+    """MaxStop optimization with fixed bias_weight=1 (not tunable)"""
+    bias_weight = 1
     
-    # Use the same codon tables as balanced optimization
+    dna_seq_upper = dna_seq.upper()
     genetic_code = st.session_state.genetic_code
     aa_to_codons = st.session_state.aa_to_codons
     
-    # Convert aa_to_codons to synonymous_codons format for compatibility
-    synonymous_codons = {}
-    for aa, codon_freq_list in aa_to_codons.items():
-        synonymous_codons[aa] = [codon for codon, freq in codon_freq_list]
+    # Protein translation
+    protein_str = ""
+    for i in range(0, len(dna_seq_upper) - 2, 3):
+        codon = dna_seq_upper[i:i+3]
+        protein_str += genetic_code.get(codon, str(Seq(codon).translate()))
     
-    # Add stop codons if not present
-    if '*' not in synonymous_codons:
-        synonymous_codons['*'] = ['TAA', 'TAG', 'TGA']
+    def get_highest_freq_codon(amino_acid):
+        """Get the highest frequency codon for an amino acid"""
+        if amino_acid in aa_to_codons and aa_to_codons[amino_acid]:
+            return max(aa_to_codons[amino_acid], key=lambda x: x[1])[0]
+        else:
+            for codon, aa in genetic_code.items():
+                if aa == amino_acid:
+                    return codon
+            return "NNN"
     
-    def get_adenosine_start_codons(aa):
-        """Get codons for amino acid that START with adenosine (A)"""
-        if aa not in synonymous_codons:
-            return []
-        return [codon for codon in synonymous_codons[aa] if codon.startswith('A')]
-    
-    def count_all_plus1_stops(sequence):
-        """Count ALL +1 frame stops in sequence"""
-        stops = 0
-        for pos in range(1, len(sequence) - 2, 3):
-            codon = sequence[pos:pos+3]
-            if len(codon) == 3 and codon in {"TAA", "TAG"}:
-                stops += 1
-                if debug:
-                    print(f"    +1 stop '{codon}' at position {pos}")
-        return stops
-    
-    def get_canonical_future(protein_remainder):
+    def get_canonical_future_sequence(protein_remainder):
         """Convert remaining protein to canonical codons"""
         canonical = ""
         for aa in protein_remainder:
-            if aa in synonymous_codons and synonymous_codons[aa]:
-                canonical += synonymous_codons[aa][0]
-            else:
-                canonical += "AAA"  # Fallback
-        canonical += "AAAAAAAAAA"  # Extra padding
+            canonical += get_highest_freq_codon(aa)
         return canonical
     
-    def find_best_codon_for_position(pos_i, current_optimised_seq, protein_seq):
-        """Find the best single codon for position i, considering all strategies"""
-        codon = dna_seq[pos_i:pos_i+3]
-        aa = str(Seq(codon).translate())
-        current_protein_pos = len(current_optimised_seq) // 3
+    def calculate_original_bonus(temp_seq, current_pos, num_codons):
+        """
+        EXACT original bonus calculation:
+        - Single codon: check position current_pos + 1, bonus = 1 if stop, 0 otherwise
+        - Two codon: check positions current_pos + 1 and current_pos + 4
+                    bonus = 2 if both stops, 1 if one stop, 0 if no stops
+        """
+        if num_codons == 1:
+            # Single codon: check only current_pos + 1
+            plus1_pos = current_pos + 1
+            if plus1_pos + 3 <= len(temp_seq):
+                codon_plus1 = temp_seq[plus1_pos:plus1_pos+3]
+                if codon_plus1 in PLUS1_STOP_CODONS:
+                    return 1
+            return 0
         
-        if debug:
-            print(f"\nPosition {pos_i} (protein pos {current_protein_pos}): {codon} ({aa})")
-        
-        # Get remaining protein for canonical future
-        remaining_protein = protein_seq[current_protein_pos + 1:]
-        canonical_future = get_canonical_future(remaining_protein)
-        
-        best_codon = codon
-        best_stops = -1
-        best_reason = "original"
-        
-        if aa not in synonymous_codons:
-            return codon, "no_synonyms"
-        
-        # STRATEGY 1: Check if this position can create TAA via L/V/I + A-starting pattern
-        if (aa in ['L', 'V', 'I'] and 
-            current_protein_pos + 1 < len(protein_seq) and 
-            pos_i + 5 < len(dna_seq)):
+        elif num_codons == 2:
+            # Two codon: check current_pos + 1 and current_pos + 4
+            plus1_pos1 = current_pos + 1
+            plus1_pos2 = current_pos + 4
             
-            next_aa = protein_seq[current_protein_pos + 1]
-            a_start_codons = get_adenosine_start_codons(next_aa)
+            stop1 = False
+            stop2 = False
             
-            if a_start_codons:
-                if debug:
-                    print(f"  Checking L/V/I + A-starting: {aa} + {next_aa}")
-                
-                # Test all combinations to see if we can create TAA
-                for codon1 in synonymous_codons[aa]:
-                    for codon2 in a_start_codons:
-                        combined = codon1 + codon2
-                        # Check +1 frame positions
-                        plus1_codon1 = combined[1:4]
-                        
-                        if plus1_codon1 == 'TAA':
-                            # Build temp sequence to count total stops
-                            temp_seq = current_optimised_seq + codon1 + canonical_future
-                            total_stops = count_all_plus1_stops(temp_seq)
-                            
-                            if debug:
-                                print(f"    TAA opportunity: {codon1} + {codon2} -> {plus1_codon1}, total stops: {total_stops}")
-                            
-                            if total_stops > best_stops:
-                                best_stops = total_stops
-                                best_codon = codon1
-                                best_reason = f"TAA_pattern_with_{codon2}"
+            if plus1_pos1 + 3 <= len(temp_seq):
+                codon1_plus1 = temp_seq[plus1_pos1:plus1_pos1+3]
+                if codon1_plus1 in PLUS1_STOP_CODONS:
+                    stop1 = True
+            
+            if plus1_pos2 + 3 <= len(temp_seq):
+                codon2_plus1 = temp_seq[plus1_pos2:plus1_pos2+3]
+                if codon2_plus1 in PLUS1_STOP_CODONS:
+                    stop2 = True
+            
+            # Original bonus system: 2 for both, 1 for one, 0 for none
+            if stop1 and stop2:
+                return 2
+            elif stop1 or stop2:
+                return 1
+            else:
+                return 0
         
-        # STRATEGY 2: Try all synonymous codons for this position
-        for syn_codon in synonymous_codons[aa]:
-            temp_seq = current_optimised_seq + syn_codon + canonical_future
-            total_stops = count_all_plus1_stops(temp_seq)
+        return 0
+    
+    def evaluate_single_codon(idx, current_optimised, aa):
+        """Evaluate single codon using EXACT original equation"""
+        if aa not in aa_to_codons:
+            current_codon = dna_seq_upper[idx:idx+3]
+            return current_codon, 0
+        
+        remaining_protein = protein_str[len(current_optimised)//3 + 1:]
+        canonical_future = get_canonical_future_sequence(remaining_protein)
+        
+        best_codon = dna_seq_upper[idx:idx+3]
+        best_score = -1
+        
+        # Get current codon frequency for baseline
+        current_codon = dna_seq_upper[idx:idx+3]
+        current_freq = 0
+        for syn_c, freq_val in aa_to_codons[aa]:
+            if syn_c == current_codon:
+                current_freq = freq_val
+                break
+        
+        # Calculate baseline score for current codon
+        temp_seq_orig = current_optimised + current_codon + canonical_future
+        bonus_orig = calculate_original_bonus(temp_seq_orig, len(current_optimised), 1)
+        baseline_score = current_freq + bias_weight * bonus_orig
+        best_score = baseline_score
+        
+        for syn_codon, freq in aa_to_codons[aa]:
+            temp_seq = current_optimised + syn_codon + canonical_future
             
-            if total_stops > best_stops:
-                best_stops = total_stops
+            # EXACT ORIGINAL EQUATION: score = frequency + bias_weight * bonus
+            bonus = calculate_original_bonus(temp_seq, len(current_optimised), 1)
+            score = freq + bias_weight * bonus
+            
+            # Deterministic tie-breaking (same as original)
+            if score > best_score or (score == best_score and syn_codon < best_codon):
+                best_score = score
                 best_codon = syn_codon
-                best_reason = "max_stops"
         
-        if debug:
-            print(f"  Best choice: {best_codon} (reason: {best_reason}, total stops: {best_stops})")
-        
-        return best_codon, best_reason
+        return best_codon, best_score
     
-    # MAIN OPTIMIZATION LOOP - ALWAYS STEP 3 NUCLEOTIDES
+    def evaluate_two_codon(idx, current_optimised, aa1, aa2):
+        """Evaluate two-codon using EXACT original equation"""
+        if aa1 not in aa_to_codons or aa2 not in aa_to_codons:
+            return None, None, -1
+        
+        remaining_protein = protein_str[len(current_optimised)//3 + 2:]
+        canonical_future = get_canonical_future_sequence(remaining_protein)
+        
+        best_c1, best_c2 = None, None
+        best_score = -1
+        
+        for c1, f1 in aa_to_codons[aa1]:
+            for c2, f2 in aa_to_codons[aa2]:
+                temp_seq = current_optimised + c1 + c2 + canonical_future
+                
+                # EXACT ORIGINAL EQUATION: score = (f1 * f2) + bias_weight * bonus
+                bonus = calculate_original_bonus(temp_seq, len(current_optimised), 2)
+                score = (f1 * f2) + bias_weight * bonus
+                
+                # Deterministic tie-breaking (same as original)
+                if score > best_score or (score == best_score and c1 + c2 < (best_c1 or "") + (best_c2 or "")):
+                    best_score = score
+                    best_c1, best_c2 = c1, c2
+        
+        return best_c1, best_c2, best_score
+    
     optimised_seq = ""
-    i = 0
+    idx = 0
     
-    while i < len(dna_seq) - 2:
-        best_codon, reason = find_best_codon_for_position(i, optimised_seq, protein)
-        optimised_seq += best_codon
+    while idx < len(dna_seq_upper) - 2:
+        current_codon = dna_seq_upper[idx:idx+3]
+        aa = genetic_code.get(current_codon, str(Seq(current_codon).translate()))
         
-        if debug:
-            current_stops = count_all_plus1_stops(optimised_seq)
-            print(f"  Added: {best_codon} (total stops so far: {current_stops})")
+        # ALWAYS evaluate both single and two-codon options at each position
+        single_codon, single_score = evaluate_single_codon(idx, optimised_seq, aa)
+        best_option = ("single", single_codon, single_score, 3)
         
-        # ALWAYS ADVANCE BY EXACTLY 3 NUCLEOTIDES
-        i += 3
+        # Two codon option (if possible)
+        if idx < len(dna_seq_upper) - 5:
+            next_codon = dna_seq_upper[idx+3:idx+6]
+            aa2 = genetic_code.get(next_codon, str(Seq(next_codon).translate()))
+            
+            two_c1, two_c2, two_score = evaluate_two_codon(idx, optimised_seq, aa, aa2)
+            if two_score > best_option[2]:
+                best_option = ("two", (two_c1, two_c2), two_score, 6)
+        
+        # Apply the best option
+        option_type, codons, score, advance = best_option
+        
+        if option_type == "single":
+            optimised_seq += codons
+        elif option_type == "two":
+            optimised_seq += codons[0] + codons[1]
+        
+        idx += advance
     
     # Handle remaining nucleotides
-    if i < len(dna_seq):
-        optimised_seq += dna_seq[i:]
+    if idx < len(dna_seq_upper):
+        optimised_seq += dna_seq_upper[idx:]
     
-    # Final verification
-    final_protein = str(Seq(optimised_seq).translate(to_stop=False))
-    assert final_protein == protein, f"Protein changed! Original: {protein}, Final: {final_protein}"
-    
-    if debug:
-        final_stops = count_all_plus1_stops(optimised_seq)
-        print(f"\nFINAL: {final_stops} total +1 stops")
-        
-        # Show all +1 stops found
-        print("All +1 frame stops found:")
-        for pos in range(1, len(optimised_seq) - 2, 3):
-            codon = optimised_seq[pos:pos+3]
-            if len(codon) == 3 and codon in {"TAA", "TAG"}:
-                print(f"  {codon} at position {pos}")
+    # Verify protein sequence unchanged
+    final_protein_str = ""
+    for i in range(0, len(optimised_seq) - 2, 3):
+        codon = optimised_seq[i:i+3]
+        final_protein_str += genetic_code.get(codon, str(Seq(codon).translate()))
+
+    if final_protein_str != protein_str:
+        logger.error("Protein sequence changed in MaxStop optimization!")
+        return dna_seq_upper
     
     return optimised_seq
-
-def isolated_maxstop_from_terminal(dna_seq_input, debug=False):
-    """
-    Wrapper that calls MaxStop and stores result
-    """
-    optimised_dna = MaxStop(dna_seq_input, debug=debug)
-    st.session_state['maxstop_result_seq'] = optimised_dna
-    return optimised_dna
-
 
 
 
@@ -1661,47 +1690,6 @@ def third_aa_has_A_G_synonymous(aa):
             return True
     return False
 
-def JT_Plus1_Stop_Optimized(seq_input):
-    """JT Plus1 stop optimization"""
-    seq = seq_input.upper()
-    out_seq = ''
-    idx = 0
-    while idx <= len(seq) - 9:
-        c1, c2, c3 = seq[idx:idx+3], seq[idx+3:idx+6], seq[idx+6:idx+9]
-        aa1 = STANDARD_GENETIC_CODE.get(c1, '?')
-        aa2 = STANDARD_GENETIC_CODE.get(c2, '?')
-        aa3 = STANDARD_GENETIC_CODE.get(c3, '?')
-
-        if (aa1 in FIRST_AA_CANDIDATES and aa2 in SECOND_AA_CANDIDATES and
-            aa3 in synonymous_codons and third_aa_has_A_G_synonymous(aa3)):
-            found_motif = False
-            for syn1 in synonymous_codons.get(aa1, []):
-                if not syn1.endswith('TA'):
-                    continue
-                for syn2 in synonymous_codons.get(aa2, []):
-                    if not syn2.startswith(('A', 'G')):
-                        continue
-                    for syn3 in synonymous_codons.get(aa3, []):
-                        if not syn3.startswith(('A', 'G')):
-                            continue
-                        motif_check = syn1[1:] + syn2 + syn3[:1]
-                        if motif_check in PLUS1_STOP_MOTIFS:
-                            out_seq += syn1 + syn2 + syn3
-                            idx += 9
-                            found_motif = True
-                            break
-                    if found_motif:
-                        break
-                if found_motif:
-                    break
-            if not found_motif:
-                out_seq += c1
-                idx += 3
-        else:
-            out_seq += c1
-            idx += 3
-    out_seq += seq[idx:]
-    return out_seq
 
 def load_codon_data_from_file(file_content):
     """Load codon usage data from uploaded file"""
@@ -1788,7 +1776,7 @@ def run_single_optimization(sequence, method, bias_weight=None):
         elif method == "MaxStop":
             if 'maxstop_result_seq' in st.session_state:
                 del st.session_state['maxstop_result_seq']
-            optimized = isolated_maxstop_from_terminal(clean_seq)
+            optimized = MaxStop(clean_seq)
             weights, _ = get_codon_weights_row(optimized)
             result = {
                 'Original_DNA': clean_seq,
@@ -1797,16 +1785,7 @@ def run_single_optimization(sequence, method, bias_weight=None):
                 'CAI_Weights': ', '.join(f"{w:.4f}" for w in weights),
                 'Method': method
             }
-        #elif method == "JT Plus1 Stop Optimization":
-            optimized = JT_Plus1_Stop_Optimized(clean_seq)
-            weights, _ = get_codon_weights_row(optimized)
-            result = {
-                'Original_DNA': clean_seq,
-                'Protein': protein_seq,
-                'Optimized_DNA': optimized,
-                'CAI_Weights': ','.join(f"{w:.4f}" for w in weights),
-                'Method': method
-            }
+       
         elif method == "+1 Frame Analysis":  # Updated from "Sequence Analysis"
             plus1_stop_counts = number_of_plus1_stops(clean_seq)
             start_pos, end_pos = find_coding_sequence_bounds(clean_seq)
