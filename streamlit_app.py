@@ -1,56 +1,74 @@
+"""
+HOOF - DNA Codon Optimization Tool
+Last updated: 20251022
+
+This tool helps optimize DNA sequences to reduce ribosomal frameshifting while maintaining
+proper codon usage. It handles both single sequences and batch processing with multiple
+optimization strategies.
+"""
+
+# Core libraries for the web interface
 import streamlit as st
 import streamlit.components.v1 as components
+
+# Data handling and numerical operations
 import pandas as pd
 import numpy as np
+
+# Visualization libraries
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+
+# System and utility imports
 import os
 import logging
 from collections import defaultdict, Counter
-from Bio.Seq import Seq
 import io
 import requests
 import time
 import re
 from dotenv import load_dotenv
 from typing import List, Dict
-from anthropic import Anthropic
 from datetime import datetime
+
+# BioPython for sequence manipulation
+from Bio.Seq import Seq
 from Bio.Data import CodonTable
 
 
-
-# Configure page
+# Set up the Streamlit page - this has to be the first Streamlit command
 st.set_page_config(
     page_title="HOOF",
-    page_icon=":horse:",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    page_icon=":horse:",  # Shows a horse emoji in the browser tab
+    layout="wide",  # Use full width of the browser
+    initial_sidebar_state="expanded"  # Start with sidebar open
 )
 
-# Configuration and Constants
-BIAS_WEIGHT_DEFAULT = 0.5
-FRAME_OFFSET = 1
-VALID_DNA_BASES = 'ATGC'
+# Application-wide constants
+BIAS_WEIGHT_DEFAULT = 0.5  # Default weight for balancing codon bias vs other factors
+FRAME_OFFSET = 1  # Offset for reading frame analysis
+VALID_DNA_BASES = 'ATGC'  # Valid nucleotides (no U since we're working with DNA)
 CONFIG_FILE = "codon_optimizer_config.json"
 DEFAULT_CONFIG = {
-    "codon_file_path": "HumanCodons.xlsx",
+    "codon_file_path": "HumanCodons.xlsx",  # Where we load codon usage data from
     "bias_weight": BIAS_WEIGHT_DEFAULT,
     "auto_open_files": True,
     "default_output_dir": "."
 }
 
-# Add to the THEMES dictionary
+# Theme definitions for data visualization
+# Each theme provides different color palettes for various chart types
+# This allows users to customize the look or choose colorblind-friendly options
 THEMES = {
     "Default": {
         "info": "Default color scheme with vibrant, high-contrast colors.",
         "colors": {
-            "utr5": "#1900FF",
-            "cds": "#4ECDC4", 
-            "utr3": "#FF6B6B",
-            "signal_peptide": "#8A2BE2",
-            "optimization": {'original': '#FF8A80', 'optimized': '#4ECDC4'},
+            "utr5": "#1900FF",  # 5' UTR regions
+            "cds": "#4ECDC4",  # Coding sequence
+            "utr3": "#FF6B6B",  # 3' UTR regions
+            "signal_peptide": "#8A2BE2",  # Signal peptide sequences
+            "optimization": {'original': '#FF8A80', 'optimized': '#4ECDC4'},  # Before/after colors
             "analysis": ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FECA57', '#FF9FF3', '#54A0FF', '#5F27CD'],
             "gradient": ['#E3F2FD', '#BBDEFB', '#90CAF9', '#64B5F6', '#42A5F5', '#2196F3', '#1E88E5', '#1976D2']
         }
@@ -79,15 +97,16 @@ THEMES = {
             "gradient": ['#FFF3E0', '#FFE0B2', '#FFCC80', '#FFB74D', '#FFA726', '#FF9800', '#FB8C00', '#F57C00']
         }
     },
-    # ADD THESE NEW COLOR-BLIND FRIENDLY THEMES
+    # --- COLOR-BLIND FRIENDLY THEMES ---
+    # These themes are designed to be distinguishable by people with color vision deficiencies
     "Colorblind Safe": {
         "info": "High contrast colors optimized for colorblind users (deuteranopia/protanopia safe).",
         "colors": {
-            "utr5": "#000000",      # Black
-            "cds": "#E69F00",       # Orange
-            "utr3": "#56B4E9",      # Sky Blue
+            "utr5": "#000000",      # Black - always distinguishable
+            "cds": "#E69F00",       # Orange - safe choice
+            "utr3": "#56B4E9",      # Sky Blue - works for most types of colorblindness
             "signal_peptide": "#009E73",  # Bluish Green
-            "optimization": {'original': '#CC79A7', 'optimized': '#E69F00'},  # Pink -> Orange
+            "optimization": {'original': '#CC79A7', 'optimized': '#E69F00'},  # Pink to Orange
             "analysis": ['#E69F00', '#56B4E9', '#009E73', '#F0E442', '#0072B2', '#D55E00', '#CC79A7', '#000000'],
             "gradient": ['#FFF2CC', '#FFE699', '#FFD966', '#FFCC33', '#E69F00', '#CC8F00', '#B37F00', '#996F00']
         }
@@ -95,10 +114,10 @@ THEMES = {
     "High Contrast": {
         "info": "Maximum contrast theme for accessibility.",
         "colors": {
-            "utr5": "#000000",      # Black
-            "cds": "#FFFFFF",       # White
-            "utr3": "#FF0000",      # Red
-            "signal_peptide": "#00FF00",  # Green
+            "utr5": "#000000",      # Pure black
+            "cds": "#FFFFFF",       # Pure white
+            "utr3": "#FF0000",      # Pure red
+            "signal_peptide": "#00FF00",  # Pure green
             "optimization": {'original': '#FF0000', 'optimized': '#00FF00'},
             "analysis": ['#000000', '#FFFFFF', '#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF'],
             "gradient": ['#CCCCCC', '#AAAAAA', '#888888', '#666666', '#444444', '#222222', '#111111', '#000000']
@@ -117,17 +136,21 @@ THEMES = {
         }
     }
 }
-# --- App Theme CSS --- (for styling the Streamlit UI itself)
+# CSS styling for the Streamlit app itself (not the charts)
+# These styles change the background colors and text colors of the interface
 APP_THEMES_CSS = {
-    "Default": "",  # No custom CSS for the default theme
+    "Default": "",  # No custom CSS - uses Streamlit's default styling
     "Oceanic": """
         <style>
+            /* Light blue background for main app area */
             [data-testid="stAppViewContainer"] {
                 background-color: #F0F8FF;
             }
+            /* Slightly darker blue for sidebar */
             [data-testid="stSidebar"] {
                 background-color: #E0F7FA;
             }
+            /* Dark teal text for better contrast */
             h1, h2, h3, h4, h5, h6, p, label, .st-emotion-cache-16txtl3, .st-emotion-cache-1jicfl2 {
                 color: #004D40;
             }
@@ -135,12 +158,15 @@ APP_THEMES_CSS = {
     """,
     "Sunset": """
         <style>
+            /* Warm cream background */
             [data-testid="stAppViewContainer"] {
                 background-color: #FFF3E0;
             }
+            /* Light orange sidebar */
             [data-testid="stSidebar"] {
                 background-color: #FFE0B2;
             }
+            /* Dark brown text for warmth */
             h1, h2, h3, h4, h5, h6, p, label, .st-emotion-cache-16txtl3, .st-emotion-cache-1jicfl2 {
                 color: #5D4037;
             }
@@ -149,62 +175,58 @@ APP_THEMES_CSS = {
 }
 
 def inject_app_theme():
-    """Injects the CSS for the currently selected theme."""
+    """Applies the selected theme's CSS to the Streamlit interface"""
     theme_css = APP_THEMES_CSS.get(st.session_state.active_theme, "")
     if theme_css:
         st.markdown(theme_css, unsafe_allow_html=True)
 
 
-# Initialize session state
+# Initialize Streamlit session state variables
+# Session state persists data across reruns of the app (when user interacts with widgets)
 if 'config' not in st.session_state:
     st.session_state.config = DEFAULT_CONFIG.copy()
 if 'active_theme' not in st.session_state:
     st.session_state.active_theme = "Default"
 if 'accumulated_results' not in st.session_state:
-    st.session_state.accumulated_results = []
+    st.session_state.accumulated_results = []  # Stores results from multiple single-sequence runs
 if 'batch_accumulated_results' not in st.session_state:
-    st.session_state.batch_accumulated_results = []
-if 'mrna_design_cds_paste' not in st.session_state:
-    st.session_state.mrna_design_cds_paste = ""
+    st.session_state.batch_accumulated_results = []  # Stores results from multiple batch runs
 if 'run_counter' not in st.session_state:
-    st.session_state.run_counter = 0
+    st.session_state.run_counter = 0  # Tracks how many optimizations we've done
 if 'genetic_code' not in st.session_state:
-    st.session_state.genetic_code = {}
+    st.session_state.genetic_code = {}  # Codon to amino acid mapping
 if 'codon_weights' not in st.session_state:
-    st.session_state.codon_weights = {}
+    st.session_state.codon_weights = {}  # Usage frequencies for each codon
 if 'preferred_codons' not in st.session_state:
-    st.session_state.preferred_codons = {}
+    st.session_state.preferred_codons = {}  # Most common codon for each amino acid
 if 'human_codon_usage' not in st.session_state:
-    st.session_state.human_codon_usage = {}
+    st.session_state.human_codon_usage = {}  # Human-specific codon usage data
 if 'aa_to_codons' not in st.session_state:
-    st.session_state.aa_to_codons = defaultdict(list)
+    st.session_state.aa_to_codons = defaultdict(list)  # Maps amino acid to its possible codons
 
-# Database search results caching
-if 'cached_search_results' not in st.session_state:
-    st.session_state.cached_search_results = None
-if 'cached_search_query' not in st.session_state:
-    st.session_state.cached_search_query = ""
-if 'cached_download_df' not in st.session_state:
-    st.session_state.cached_download_df = None
 
-# Load environment variables
+# Load any environment variables from .env file (if it exists)
 load_dotenv()
 
-# Setup logging
+# Configure logging to track what the app is doing
+# Logs go both to a file and to the console
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('codon_optimizer.log'),
-        logging.StreamHandler()
+        logging.FileHandler('codon_optimizer.log'),  # Save to file
+        logging.StreamHandler()  # Also print to console
     ]
 )
 logger = logging.getLogger(__name__)
 
-# Define constants
-Slippery_Motifs = {"TTTT", "TTTC"}
-PLUS1_STOP_CODONS = {"TAA", "TAG"}
-PLUS1_STOP_MOTIFS = {"TAATAA", "TAGTAG", "TAGTAA", "TAATAG"}
+# Biological constants for frame analysis
+Slippery_Motifs = {"TTTT", "TTTC"}  # Sequences that can cause ribosomal slipping
+PLUS1_STOP_CODONS = {"TAA", "TAG"}  # Stop codons in the +1 reading frame
+PLUS1_STOP_MOTIFS = {"TAATAA", "TAGTAG", "TAGTAA", "TAATAG"}  # Double stops in +1 frame
+
+# The standard genetic code - maps each 3-letter codon to its amino acid
+# '*' represents stop codons
 STANDARD_GENETIC_CODE = {
     'TTT': 'F', 'TTC': 'F', 'TTA': 'L', 'TTG': 'L', 'CTT': 'L', 'CTC': 'L', 'CTA': 'L', 'CTG': 'L',
     'ATT': 'I', 'ATC': 'I', 'ATA': 'I', 'GTT': 'V', 'GTC': 'V', 'GTA': 'V', 'GTG': 'V',
@@ -218,51 +240,79 @@ STANDARD_GENETIC_CODE = {
     'TAA': '*', 'TAG': '*', 'TGA': '*'
 }
 
+# Create a dictionary mapping amino acids to their synonymous codons
+# This is used throughout the optimization algorithms
 synonymous_codons = defaultdict(list)
 for codon_val, aa_val in STANDARD_GENETIC_CODE.items(): 
     synonymous_codons[aa_val].append(codon_val)
 
-# Synonymous Codons (Mapping AA -> List[Codon]) - This is the codon_table equivalent
+# Alternative name for the same thing (kept for compatibility)
 NC_synonymous_codons = defaultdict(list)
 for codon, aa in STANDARD_GENETIC_CODE.items():
     NC_synonymous_codons[aa].append(codon)
     
+# Amino acids that commonly appear at slippery sites
+# These are used in frame-shift detection
 FIRST_AA_CANDIDATES = ['L', 'I', 'V']
 SECOND_AA_CANDIDATES = ['V', 'I']
 
-# Utility Functions
+# --- UTILITY FUNCTIONS ---
+
 def calculate_gc_window(sequence, position, window_size=25):
-    """Calculate GC content for a sliding window around a given position"""
+    """
+    Calculate GC content for a sliding window around a position.
+    
+    This helps us see if there are GC-rich or GC-poor regions in the sequence.
+    High GC content can affect RNA stability and translation.
+    
+    Args:
+        sequence: DNA sequence string
+        position: Amino acid position (1-based indexing)
+        window_size: Size of the window in base pairs (default 25bp)
+    
+    Returns:
+        GC percentage as a float (0-100)
+    """
     # Convert position from 1-based to 0-based indexing
     center_pos = (position - 1) * 3  # Convert amino acid position to nucleotide position
     
-    # Calculate window boundaries
+    # Figure out the window boundaries, making sure we don't go past the sequence ends
     start = max(0, center_pos - window_size // 2)
     end = min(len(sequence), center_pos + window_size // 2 + 1)
     
-    # Extract window sequence
+    # Grab the sequence in this window
     window_seq = sequence[start:end]
     
     if len(window_seq) == 0:
         return 0.0
     
-    # Calculate GC content
+    # Count G's and C's, calculate percentage
     gc_count = sum(1 for base in window_seq.upper() if base in 'GC')
     return (gc_count / len(window_seq)) * 100
 
 @st.cache_data
 def load_immunogenic_peptides(file_path="epitope_table_export.xlsx"):
-    """Load immunogenic peptides from Excel file"""
+    """
+    Load immunogenic peptides from an Excel file.
+    
+    This data is used to check if our optimized sequences might contain peptides
+    that could trigger immune responses. Cached so we only load it once.
+    
+    Args:
+        file_path: Path to the Excel file with epitope data
+    
+    Returns:
+        Cleaned DataFrame with peptide sequences, or empty DataFrame if file not found
+    """
     try:
         if os.path.exists(file_path):
             df = pd.read_excel(file_path)
             
-            
-            
-            # Clean column names - remove extra spaces and handle duplicates
+            # Clean up column names - Excel files can be messy
             df.columns = df.columns.str.strip()
             
-            # Handle duplicate column names by keeping only the first occurrence
+            # Handle duplicate column names by numbering them
+            # (sometimes Excel exports create duplicate headers)
             seen_columns = {}
             new_columns = []
             for col in df.columns:
@@ -275,9 +325,8 @@ def load_immunogenic_peptides(file_path="epitope_table_export.xlsx"):
             
             df.columns = new_columns
             
-            
-            
-            # Look for the Name column (should be the 3rd column based on your structure)
+            # Try to find the column that contains the actual peptide sequences
+            # Different files might call it different things
             name_column = None
             possible_name_columns = ['Name', 'Name_1', 'Name_2', 'Name_3']
             
@@ -286,35 +335,26 @@ def load_immunogenic_peptides(file_path="epitope_table_export.xlsx"):
                     name_column = col
                     break
             
-            # If still not found, try to find it by position (3rd column)
+            # If we still haven't found it, just use the 3rd column (common format)
             if name_column is None and len(df.columns) >= 3:
-                name_column = df.columns[2]  # 3rd column (0-indexed)
+                name_column = df.columns[2]
                 
-            
             if name_column is None:
                 st.error(f"Could not find Name column. Available columns: {list(df.columns)}")
                 return pd.DataFrame()
             
-            
-            
-            
-            
-            # Clean and prepare the data
+            # Clean up the peptide data
             df_clean = df.dropna(subset=[name_column])
             df_clean = df_clean[df_clean[name_column].notna()]
             df_clean[name_column] = df_clean[name_column].astype(str).str.upper().str.strip()
             
-            # Filter out very short sequences and invalid entries
+            # Filter out junk - sequences that are too short or invalid
             df_clean = df_clean[df_clean[name_column].str.len() >= 3]
             df_clean = df_clean[df_clean[name_column] != 'NAN']
             df_clean = df_clean[df_clean[name_column] != '']
             
-            # Store the column name for later use
+            # Remember which column has the sequences for later
             df_clean.attrs['epitope_column'] = name_column
-            
-            
-            
-           
             
             return df_clean
         else:
@@ -326,19 +366,38 @@ def load_immunogenic_peptides(file_path="epitope_table_export.xlsx"):
         return pd.DataFrame()
 
 def get_consistent_color_palette(n_colors, palette_type="optimization"):
-    """Generate consistent color palettes for charts based on the active theme"""
+    """
+    Generate color palettes that match the currently selected theme.
+    Keeps charts visually consistent with the selected theme.
+    
+    Args:
+        n_colors: How many colors we need
+        palette_type: Type of palette - "optimization", "analysis", or "gradient"
+    
+    Returns:
+        List of color hex codes or dict for optimization type
+    """
     theme_colors = THEMES[st.session_state.active_theme]["colors"]
     
     if palette_type == "optimization":
         return theme_colors["optimization"]
     elif palette_type == "analysis":
+        # Cycle through the analysis colors if we need more than available
         base_colors = theme_colors["analysis"]
         return [base_colors[i % len(base_colors)] for i in range(n_colors)]
     elif palette_type == "gradient":
         return theme_colors["gradient"]
 
 def display_copyable_sequence(sequence, label, key_suffix=""):
-    """Display sequence in a copyable format"""
+    """
+    Show a DNA/RNA sequence in a text box that's easy to copy.
+    Users can select all with Ctrl+A and copy with Ctrl+C.
+    
+    Args:
+        sequence: The DNA/RNA sequence to display
+        label: Text to show above the box
+        key_suffix: Unique identifier for this text area (needed by Streamlit)
+    """
     st.text_area(
         label,
         sequence,
@@ -347,386 +406,83 @@ def display_copyable_sequence(sequence, label, key_suffix=""):
         help="Click in the text area and use Ctrl+A to select all, then Ctrl+C to copy"
     )
 
-def display_colored_mrna_sequence(utr5_seq, cds_seq, utr3_seq, signal_peptide_seq="", tag_sequence_seq="", key_suffix=""):
-    """Display mRNA sequence with 5'UTR, CDS, 3'UTR, signal peptide, and optional tag highlighted in different colors."""
-    st.subheader("Full mRNA Sequence (Colored)")
-
-    # Define colors for each section from the active theme
-    theme_colors = THEMES[st.session_state.active_theme]["colors"]
-    color_utr5 = theme_colors["utr5"]
-    color_cds = theme_colors["cds"]
-    color_utr3 = theme_colors["utr3"]
-    color_signal_peptide = theme_colors["signal_peptide"]
-    color_tag = "#FFA500"  # Orange color for tags
-
-    # Create HTML string with colored spans
-    colored_parts = []
-    full_sequence_parts = []
-    
-    if utr5_seq:
-        colored_parts.append(f'<span style="color: {color_utr5}; font-weight: bold;">{utr5_seq}</span>')
-        full_sequence_parts.append(utr5_seq)
-    
-    if signal_peptide_seq:
-        colored_parts.append(f'<span style="color: {color_signal_peptide}; font-weight: bold;">{signal_peptide_seq}</span>')
-        full_sequence_parts.append(signal_peptide_seq)
-    
-    if cds_seq:
-        colored_parts.append(f'<span style="color: {color_cds}; font-weight: bold;">{cds_seq}</span>')
-        full_sequence_parts.append(cds_seq)
-    
-    if tag_sequence_seq:
-        colored_parts.append(f'<span style="color: {color_tag}; font-weight: bold;">{tag_sequence_seq}</span>')
-        full_sequence_parts.append(tag_sequence_seq)
-    
-    if utr3_seq:
-        colored_parts.append(f'<span style="color: {color_utr3}; font-weight: bold;">{utr3_seq}</span>')
-        full_sequence_parts.append(utr3_seq)
-
-    colored_html = f"""
-    <div style="font-family: monospace; white-space: pre-wrap; word-break: break-all; background-color: #f0f2f6; padding: 10px; border-radius: 5px; font-size: 0.8em;">
-        {''.join(colored_parts)}
-    </div>
-    """
-    st.markdown(colored_html, unsafe_allow_html=True)
-
-    # Also provide a copyable text area for the full sequence
-    full_sequence = ''.join(full_sequence_parts)
-    st.text_area(
-        "Copy Full mRNA Sequence:",
-        full_sequence,
-        height=120,
-        key=f"copy_full_mrna_{key_suffix}",
-        help="Click in the text area and use Ctrl+A to select all, then Ctrl+C to copy"
-    )
-    
-    # Update legend
-    legend_items = []
-    if utr5_seq:
-        legend_items.append(f'<span style="color: {color_utr5};">■</span> 5\' UTR ({len(utr5_seq)} bp)')
-    if signal_peptide_seq:
-        legend_items.append(f'<span style="color: {color_signal_peptide};">■</span> Signal Peptide ({len(signal_peptide_seq)} bp)')
-    if cds_seq:
-        legend_items.append(f'<span style="color: {color_cds};">■</span> CDS ({len(cds_seq)} bp)')
-    if tag_sequence_seq:
-        legend_items.append(f'<span style="color: {color_tag};">■</span> 3\' Tag ({len(tag_sequence_seq)} bp)')
-    if utr3_seq:
-        legend_items.append(f'<span style="color: {color_utr3};">■</span> 3\' UTR ({len(utr3_seq)} bp)')
-    
-    legend_html = f"""
-    <div style="font-size: 0.8em; color: gray;">
-        {' &nbsp;&nbsp; '.join(legend_items)}
-    </div>
-    """
-    st.markdown(legend_html, unsafe_allow_html=True)
-    
-    
-def create_geneious_like_visualization(utr5_seq, cds_seq, utr3_seq, signal_peptide_seq="", tag_sequence_seq="", double_stop_codon="TAATAA", key_suffix=""):
-    """
-    Create a Geneious-like visualization of the mRNA sequence with nucleotides and amino acids.
-    Amino acids are only shown for the coding sequence (signal peptide + CDS + tag).
-    """
-    # Process the sequences to handle the stop codon correctly
-    processed_cds = cds_seq.strip()
-    processed_tag = tag_sequence_seq.strip()
-    stop_codons = {"TAA", "TAG", "TGA"}
-
-    # Remove existing stop codons from the tag or CDS
-    if processed_tag:
-        while len(processed_tag) >= 3 and processed_tag[-3:].upper() in stop_codons:
-            processed_tag = processed_tag[:-3]
-    else:
-        while len(processed_cds) >= 3 and processed_cds[-3:].upper() in stop_codons:
-            processed_cds = processed_cds[:-3]
-
-    # Generate a unique suffix based on key_suffix and a random value
-    unique_id = f"{key_suffix}_{id(utr5_seq)}"
-    
-    # Get theme colors
-    theme_colors = THEMES[st.session_state.active_theme]["colors"]
-    color_utr5 = theme_colors["utr5"]
-    color_cds = theme_colors["cds"]
-    color_utr3 = theme_colors["utr3"]
-    color_signal_peptide = theme_colors["signal_peptide"]
-    color_tag = theme_colors.get("tag", "#FFA500")  # Use theme color or fallback
-    
-    # Create the visualization sections
-    sections = []
-    
-    # 5' UTR Section
-    if utr5_seq:
-        sections.append({
-            'name': "5' UTR",
-            'sequence': utr5_seq,
-            'color': color_utr5,
-            'show_aa': False
-        })
-    
-    # Signal Peptide Section
-    if signal_peptide_seq:
-        sections.append({
-            'name': "Signal Peptide",
-            'sequence': signal_peptide_seq,
-            'color': color_signal_peptide,
-            'show_aa': True
-        })
-    
-    # CDS Section
-    if processed_cds:
-        sections.append({
-            'name': "CDS",
-            'sequence': processed_cds,
-            'color': color_cds,
-            'show_aa': True
-        })
-    
-    # 3' Tag Section (NEW)
-    if processed_tag:
-        sections.append({
-            'name': "3' Tag",
-            'sequence': processed_tag,
-            'color': color_tag,
-            'show_aa': True
-        })
-
-    # Stop Codon Section
-    sections.append({
-        'name': "Stop Codon",
-        'sequence': double_stop_codon,
-        'color': color_cds,  # Same color as CDS for now
-        'show_aa': True
-    })
-    
-    # 3' UTR Section
-    if utr3_seq:
-        sections.append({
-            'name': "3' UTR",
-            'sequence': utr3_seq,
-            'color': color_utr3,
-            'show_aa': False
-        })
-    
-    # Display each section
-    for section_idx, section in enumerate(sections):
-        st.markdown(f"#### {section['name']} ({len(section['sequence'])} bp)")
-        
-        seq = section['sequence']
-        color = section['color']
-        show_aa = section['show_aa']
-        
-        # For coding sequences, we want to align codons properly
-        # Use chunk size that's divisible by 3 for coding regions
-        if show_aa:
-            # Use 60 nucleotides (20 codons) for coding regions
-            chunk_size = 60
-        else:
-            # Use 60 nucleotides for non-coding regions
-            chunk_size = 60
-        
-        for chunk_idx, i in enumerate(range(0, len(seq), chunk_size)):
-            chunk = seq[i:i+chunk_size]
-            start_pos = i + 1
-            end_pos = min(i + chunk_size, len(seq))
-            
-            # Display position info
-            st.markdown(f"**Position {start_pos}-{end_pos}**")
-            
-            if show_aa and len(chunk) >= 3:
-                # For coding sequences, create aligned nucleotide and amino acid display
-                
-                # Split nucleotides into codons for better visualization
-                codons = []
-                amino_acids = []
-                
-                for j in range(0, len(chunk) - 2, 3):
-                    codon = chunk[j:j+3]
-                    if len(codon) == 3:
-                        codons.append(codon)
-                        aa = st.session_state.genetic_code.get(codon.upper(), 'X')
-                        amino_acids.append(aa)
-                
-                # Handle remaining nucleotides (less than 3)
-                remaining = chunk[len(codons)*3:]
-                if remaining:
-                    codons.append(remaining + " " * (3 - len(remaining)))  # Pad with spaces
-                    amino_acids.append(" ")  # Space for incomplete codon
-                
-                # Create spaced codon display
-                spaced_codons = "   ".join(codons)  # 3 spaces between codons
-
-                # Center each AA under its codon
-                spaced_aas = "   ".join([f" {aa} " for aa in amino_acids])  # pad each AA with 1 space
-
-                # Display nucleotides (codons)
-                nucleotide_html = f"""
-                <div style="
-                    font-family: 'Courier New', monospace; 
-                    background: #f8f9fa; 
-                    padding: 10px; 
-                    border-radius: 5px; 
-                    border-left: 4px solid {color};
-                    margin: 5px 0;
-                ">
-                    <div style="
-                        color: {color}; 
-                        font-weight: bold; 
-                        font-size: 1.1em; 
-                        letter-spacing: 1px;
-                        word-break: break-all;
-                    ">
-                        {spaced_codons}
-                    </div>
-                </div>
-                """
-                st.markdown(nucleotide_html, unsafe_allow_html=True)
-                
-                # Display amino acids aligned with codons
-                aa_html = f"""
-                <div style="
-                    font-family: 'Courier New', monospace; 
-                    background: #fff; 
-                    padding: 5px 10px; 
-                    border-radius: 3px; 
-                    border-left: 4px solid {color};
-                    margin: 0 0 10px 0;
-                ">
-                    <div style="
-                        color: #333; 
-                        font-size: 1.0em; 
-                        letter-spacing: 13.5px;
-                        font-weight: bold;
-                    ">
-                        {spaced_aas}
-                    </div>
-                </div>
-                """
-                st.markdown(aa_html, unsafe_allow_html=True)
-                
-            else:
-                # For non-coding sequences, just display nucleotides
-                nucleotide_html = f"""
-                <div style="
-                    font-family: 'Courier New', monospace; 
-                    background: #f8f9fa; 
-                    padding: 10px; 
-                    border-radius: 5px; 
-                    border-left: 4px solid {color};
-                    margin: 5px 0;
-                ">
-                    <div style="
-                        color: {color}; 
-                        font-weight: bold; 
-                        font-size: 1.1em; 
-                        letter-spacing: 1px;
-                        word-break: break-all;
-                    ">
-                        {chunk}
-                    </div>
-                </div>
-                """
-                st.markdown(nucleotide_html, unsafe_allow_html=True)
-            
-            # Add some spacing between chunks
-            if i + chunk_size < len(seq):
-                st.markdown("---")
-    
-    # Add summary information
-    st.markdown("### Sequence Summary")
-    
-    total_length = len(utr5_seq) + len(signal_peptide_seq) + len(processed_cds) + len(processed_tag) + len(double_stop_codon) + len(utr3_seq)
-    coding_length = len(signal_peptide_seq) + len(processed_cds) + len(processed_tag) + len(double_stop_codon)
-    
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Total Length", f"{total_length} bp")
-    with col2:
-        st.metric("Coding Length", f"{coding_length} bp")
-    with col3:
-        if coding_length > 0:
-            protein_length = coding_length // 3
-            st.metric("Protein Length", f"{protein_length} aa")
-        else:
-            st.metric("Protein Length", "0 aa")
-    with col4:
-        full_seq = utr5_seq + signal_peptide_seq + processed_cds + processed_tag + double_stop_codon + utr3_seq
-        gc_content = calculate_gc_content(full_seq) if full_seq else 0
-        st.metric("GC Content", f"{gc_content:.1f}%")
-    
-    # Legend
-    st.markdown("### Legend")
-    legend_items = []
-    
-    if utr5_seq:
-        legend_items.append(f'<span style="color: {color_utr5}; font-weight: bold;">■</span> 5\' UTR')
-    if signal_peptide_seq:
-        legend_items.append(f'<span style="color: {color_signal_peptide}; font-weight: bold;">■</span> Signal Peptide')
-    if processed_cds:
-        legend_items.append(f'<span style="color: {color_cds}; font-weight: bold;">■</span> CDS')
-    if processed_tag:
-        legend_items.append(f'<span style="color: {color_tag}; font-weight: bold;">■</span> 3\' Tag')
-    legend_items.append(f'<span style="color: {color_cds}; font-weight: bold;">■</span> Stop Codon')
-    if utr3_seq:
-        legend_items.append(f'<span style="color: {color_utr3}; font-weight: bold;">■</span> 3\' UTR')
-    
-    legend_html = f"""
-    <div style="font-size: 0.9em; margin: 10px 0;">
-        {' &nbsp;&nbsp; '.join(legend_items)}
-    </div>
-    """
-    st.markdown(legend_html, unsafe_allow_html=True)
-    
-    # Add explanation
-    st.info("💡 **Reading Guide**: In coding regions, nucleotides are grouped by codons (3 letters) with the corresponding amino acid shown below each codon.")
-
 
 
 def find_coding_sequence_bounds(dna_seq):
-    """Find start and stop positions of coding sequence, prioritizing ACCATG."""
-    dna_seq_upper = dna_seq.upper().replace('U', 'T')
+    """
+    Find where the actual coding sequence starts and ends in a DNA sequence.
+    
+    We prioritize finding the Kozak consensus sequence (ACCATG) because that's usually
+    where translation really starts in eukaryotes. If we can't find that, we fall back
+    to just finding the first ATG.
+    
+    Args:
+        dna_seq: The full DNA sequence (may include UTRs)
+    
+    Returns:
+        tuple: (start_position, end_position) of the CDS, or (None, None) if not found
+    """
+    dna_seq_upper = dna_seq.upper().replace('U', 'T')  # Handle RNA input too
     stop_codons = {"TAA", "TAG", "TGA"}
     
     start_pos = None
     
-    # Always prioritize finding the ACCATG Kozak sequence.
+    # Look for the Kozak sequence first - ACCATG
+    # This is the most common translation initiation context in mammals
     accatg_pos = dna_seq_upper.find('ACCATG')
     if accatg_pos != -1:
-        # The actual start codon (ATG) begins 3 bases into "ACCATG".
+        # ATG starts 3 bases into ACCATG
         start_pos = accatg_pos + 3
     else:
-        # Fallback: if no ACCATG, find the first occurrence of ATG.
+        # No Kozak? Just find the first ATG then
         atg_pos = dna_seq_upper.find('ATG')
         if atg_pos != -1:
-            # The sequence starts at the beginning of the first ATG found.
             start_pos = atg_pos
             
     if start_pos is None:
-        # If no start codon is found at all, we can't proceed.
+        # No start codon at all - can't do anything
         return None, None
     
-    # Find end position - first in-frame stop codon, starting from our found start_pos.
+    # Now find the end - first in-frame stop codon after our start
     end_pos = None
-    for i in range(start_pos, len(dna_seq_upper) - 2, 3):
+    for i in range(start_pos, len(dna_seq_upper) - 2, 3):  # Step by 3 to stay in frame
         codon = dna_seq_upper[i:i+3]
         if len(codon) == 3 and codon in stop_codons:
-            end_pos = i  # Position of the stop codon itself.
+            end_pos = i
             break
             
     return start_pos, end_pos
 
 
 def create_interactive_cai_gc_plot(positions, cai_weights, amino_acids, sequence, seq_name, color='#4ECDC4'):
-    """Create interactive plot combining CAI weights and GC content"""
+    """
+    Create an interactive plot showing CAI weights and GC content together.
     
-    # Calculate 10bp window GC content for each position
+    This helps visualize codon quality (CAI) alongside GC content patterns.
+    The two metrics are plotted on separate Y-axes since they have different scales.
+    
+    Args:
+        positions: List of amino acid positions
+        cai_weights: CAI weight at each position (0-1 scale)
+        amino_acids: The actual amino acid at each position
+        sequence: Full DNA sequence
+        seq_name: Name for the plot title
+        color: Color for the CAI line
+    
+    Returns:
+        Plotly figure object with interactive features
+    """
+    
+    # Calculate GC content in 25bp windows around each position
     gc_content_10bp = [calculate_gc_window(sequence, pos, 25) for pos in positions]
     
-    # Create subplot with secondary y-axis
+    # Create a plot with two Y-axes (one for CAI, one for GC%)
     fig = make_subplots(
         specs=[[{"secondary_y": True}]],
         subplot_titles=[f'CAI Weights and 25bp GC Content - {seq_name}']
     )
     
-    # Add CAI weights trace
+    # Add the CAI trace (primary Y-axis)
     fig.add_trace(
         go.Scatter(
             x=positions,
@@ -741,7 +497,7 @@ def create_interactive_cai_gc_plot(positions, cai_weights, amino_acids, sequence
         secondary_y=False,
     )
     
-    # Add GC content trace
+    # Add the GC content trace (secondary Y-axis)
     theme_colors = get_consistent_color_palette(1, "optimization")
     fig.add_trace(
         go.Scatter(
@@ -756,19 +512,17 @@ def create_interactive_cai_gc_plot(positions, cai_weights, amino_acids, sequence
         secondary_y=True,
     )
     
-    # Set x-axis title
+    # Set up the axes
     fig.update_xaxes(title_text="Amino Acid Position")
-    
-    # Set y-axes titles
     fig.update_yaxes(title_text="CAI Weight", secondary_y=False, range=[0, 1])
     fig.update_yaxes(title_text="GC Content (%)", secondary_y=True, range=[0, 100])
     
-    # Update layout
+    # Configure the overall layout
     fig.update_layout(
         height=500,
-        hovermode='x unified',
+        hovermode='x unified',  # Show all values at once when hovering
         legend=dict(
-            orientation="h",
+            orientation="h",  # Horizontal legend
             yanchor="bottom",
             y=1.02,
             xanchor="right",
@@ -780,11 +534,29 @@ def create_interactive_cai_gc_plot(positions, cai_weights, amino_acids, sequence
     return fig
 
 def create_interactive_cai_stop_codon_plot(positions, cai_weights, amino_acids, stop_codon_positions, seq_name, frame_type, color='#4ECDC4'):
-    """Create interactive plot combining CAI weights and stop codon locations"""
+    """
+    Create an interactive plot showing CAI weights with stop codon locations.
+    
+    Stop codons are shown as vertical bars to highlight where premature termination
+    could occur in alternate reading frames. This is crucial for identifying
+    potential frame-shifting issues.
+    
+    Args:
+        positions: Amino acid positions along the sequence
+        cai_weights: CAI weight at each position
+        amino_acids: Amino acids at each position
+        stop_codon_positions: Where stop codons appear in the alternate frame
+        seq_name: Sequence name for the title
+        frame_type: Which frame we're analyzing (+1, +2, etc.)
+        color: Color for the CAI line
+    
+    Returns:
+        Plotly figure with CAI line and stop codon bars
+    """
     
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     
-    # Add CAI weights trace
+    # Add the CAI weights as a line plot
     fig.add_trace(
         go.Scatter(
             x=positions,
@@ -799,15 +571,15 @@ def create_interactive_cai_stop_codon_plot(positions, cai_weights, amino_acids, 
         secondary_y=False,
     )
     
-    # Add stop codon bars
+    # Add stop codons as bars if we found any
     if stop_codon_positions:
         theme_colors = get_consistent_color_palette(1, "optimization")
         fig.add_trace(
             go.Bar(
                 x=stop_codon_positions,
-                y=[1] * len(stop_codon_positions), # Bars will go up to y=1 on secondary axis
+                y=[1] * len(stop_codon_positions),  # Bars extend to full height of secondary axis
                 name=f'{frame_type} Stop Codons',
-                marker_color=theme_colors['original'],  # Use theme color for stops
+                marker_color=theme_colors['original'],
                 opacity=0.6,
                 width=0.8,
                 hovertemplate='<b>Position:</b> %{x}<br><b>Stop Codon</b><extra></extra>'
@@ -815,14 +587,12 @@ def create_interactive_cai_stop_codon_plot(positions, cai_weights, amino_acids, 
             secondary_y=True,
         )
 
-    # Set x-axis title
+    # Configure the axes
     fig.update_xaxes(title_text="Amino Acid Position")
-    
-    # Set y-axes titles
     fig.update_yaxes(title_text="CAI Weight", secondary_y=False, range=[0, 1])
     fig.update_yaxes(title_text="Stop Codon", secondary_y=True, showticklabels=False, range=[0, 1])
     
-    # Update layout
+    # Set up the layout
     fig.update_layout(
         title=f'CAI Weights and {frame_type} Stop Codon Locations - {seq_name}',
         height=500,
@@ -840,12 +610,15 @@ def create_interactive_cai_stop_codon_plot(positions, cai_weights, amino_acids, 
     return fig
 
 def create_interactive_bar_chart(x_data, y_data, labels, title, color_scheme='viridis'):
-    """Create interactive bar chart using the active theme"""
+    """
+    Create a themed interactive bar chart.
+    Colors automatically match the selected theme.
+    """
     theme_analysis_colors = get_consistent_color_palette(len(x_data), "analysis")
     fig = go.Figure(data=go.Bar(
         x=x_data,
         y=y_data,
-        text=[f'{val:.1f}' for val in y_data],
+        text=[f'{val:.1f}' for val in y_data],  # Show values on bars
         textposition='auto',
         marker_color=theme_analysis_colors,
         hovertemplate='<b>%{x}</b><br>Value: %{y:.2f}<extra></extra>'
@@ -862,16 +635,18 @@ def create_interactive_bar_chart(x_data, y_data, labels, title, color_scheme='vi
     return fig
 
 def create_interactive_pie_chart(values, labels, title, show_percentages=True):
-    """Create interactive pie chart using the active theme"""
-    # Get theme colors - use first few colors from analysis palette
+    """
+    Create an interactive pie chart with theme colors.
+    Useful for showing codon usage distribution or other proportional data.
+    """
     theme_colors = THEMES[st.session_state.active_theme]["colors"]["analysis"]
     
-    # Create color list matching the number of labels
+    # Match colors to the number of slices we need
     chart_colors = []
     for i in range(len(labels)):
         chart_colors.append(theme_colors[i % len(theme_colors)])
     
-    # For single sequence analysis, show absolute numbers
+    # Show either percentages or absolute counts
     textinfo = 'label+percent' if show_percentages else 'label+value'
     
     fig = go.Figure(data=go.Pie(
@@ -881,7 +656,7 @@ def create_interactive_pie_chart(values, labels, title, show_percentages=True):
         textinfo=textinfo,
         marker=dict(
             colors=chart_colors,
-            line=dict(color='#FFFFFF', width=2)  # White borders for better definition
+            line=dict(color='#FFFFFF', width=2)  # White borders between slices
         )
     ))
     
@@ -898,20 +673,23 @@ def create_interactive_pie_chart(values, labels, title, show_percentages=True):
             yanchor="middle",
             y=0.5,
             xanchor="left",
-            x=1.05
+            x=1.05  # Position legend to the right
         ),
-        margin=dict(l=20, r=120, t=50, b=20)  # Adjust margins for legend
+        margin=dict(l=20, r=120, t=50, b=20)
     )
     
     return fig
 
 def create_interactive_comparison_chart(sequences, original_values, optimized_values, metric_name, y_title):
-    """Create interactive before/after comparison chart"""
+    """
+    Create a before/after comparison chart.
+    Shows original vs optimized values side-by-side for easy comparison.
+    """
     fig = go.Figure()
     
     colors = get_consistent_color_palette(1, "optimization")
     
-    # Add original values
+    # Original values in one color
     fig.add_trace(go.Bar(
         name='Original',
         x=sequences,
@@ -920,7 +698,7 @@ def create_interactive_comparison_chart(sequences, original_values, optimized_va
         hovertemplate='<b>%{x}</b><br>Original ' + metric_name + ': %{y}<extra></extra>'
     ))
     
-    # Add optimized values
+    # Optimized values in another color
     fig.add_trace(go.Bar(
         name='Optimized',
         x=sequences,
@@ -933,7 +711,7 @@ def create_interactive_comparison_chart(sequences, original_values, optimized_va
         title=f'{metric_name}: Before vs After Optimization',
         xaxis_title='Sequence',
         yaxis_title=y_title,
-        barmode='group',
+        barmode='group',  # Bars side-by-side, not stacked
         height=500,
         hovermode='x unified'
     )
@@ -941,7 +719,10 @@ def create_interactive_comparison_chart(sequences, original_values, optimized_va
     return fig
 
 def create_interactive_stacked_bar_chart(x_data, y_data_dict, title, y_title):
-    """Create interactive stacked bar chart"""
+    """
+    Create stacked bar chart for showing composition data.
+    Each bar is divided into segments representing different categories.
+    """
     fig = go.Figure()
     
     colors = get_consistent_color_palette(len(y_data_dict), "analysis")
@@ -959,7 +740,7 @@ def create_interactive_stacked_bar_chart(x_data, y_data_dict, title, y_title):
         title=title,
         xaxis_title='Sequence',
         yaxis_title=y_title,
-        barmode='stack',
+        barmode='stack',  # Stack bars on top of each other
         height=500,
         hovermode='x unified'
     )
@@ -969,16 +750,22 @@ def create_interactive_stacked_bar_chart(x_data, y_data_dict, title, y_title):
 def create_interactive_cai_gc_overlay_plot(
     positions, cai_weights, amino_acids, sequence, seq_name,
     plus1_stop_positions=None, minus1_stop_positions=None, slippery_positions=None,
-    show_options=None,  # Parameter ignored for compatibility
+    show_options=None,  
     color='#4ECDC4'
 ):
-    """Create interactive plot with a clickable legend to toggle overlays."""
+    """
+    Create a comprehensive interactive plot with toggleable overlays.
+    
+    This is the "everything at once" view that lets users click legend items
+    to show/hide different features (CAI, GC content, stop codons, slippery sites).
+    Helps identify problematic regions in the sequence.
+    """
     from plotly.subplots import make_subplots
     import plotly.graph_objects as go
 
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-    # CAI weights (Visible by default)
+    # CAI weights - always visible by default
     fig.add_trace(
         go.Scatter(
             x=positions,
@@ -994,7 +781,7 @@ def create_interactive_cai_gc_overlay_plot(
         secondary_y=False,
     )
 
-    # GC content (Visible by default)
+    # GC content - always visible by default
     gc_content_25bp = [calculate_gc_window(sequence, pos, 25) for pos in positions]
     fig.add_trace(
         go.Scatter(
@@ -1010,28 +797,28 @@ def create_interactive_cai_gc_overlay_plot(
         secondary_y=True,
     )
 
-    # +1 stops (Hidden by default, toggled via legend)
+    # +1 frame stop codons - hidden by default (click legend to show)
     if plus1_stop_positions:
         fig.add_trace(
             go.Bar(
                 x=plus1_stop_positions,
-                y=[100] * len(plus1_stop_positions), # Use 100 to match the GC axis
+                y=[100] * len(plus1_stop_positions),  # Scale to 100 to match GC axis
                 name='+1 Stops',
                 marker_color='#FF6B6B',
                 opacity=0.6,
                 width=0.8,
                 hovertemplate='<b>Position:</b> %{x}<br>+1 Stop Codon<extra></extra>',
-                visible='legendonly'
+                visible='legendonly'  # Hidden until user clicks legend
             ),
             secondary_y=True,
         )
 
-    # -1 stops (Hidden by default, toggled via legend)
+    # -1 frame stop codons - also hidden by default
     if minus1_stop_positions:
         fig.add_trace(
             go.Bar(
                 x=minus1_stop_positions,
-                y=[100] * len(minus1_stop_positions), # Use 100 to match the GC axis
+                y=[100] * len(minus1_stop_positions),
                 name='-1 Stops',
                 marker_color='#4ECDC4',
                 opacity=0.6,
@@ -1042,16 +829,16 @@ def create_interactive_cai_gc_overlay_plot(
             secondary_y=True,
         )
 
-    # Slippery sites (Hidden by default, toggled via legend)
+    # Slippery sites (TTTT, TTTC motifs) - hidden by default
     if slippery_positions:
         slippery_aa_positions = [pos['amino_acid_position'] for pos in slippery_positions]
         slippery_motifs = [pos['motif'] for pos in slippery_positions]
         fig.add_trace(
             go.Bar(
                 x=slippery_aa_positions,
-                y=[100] * len(slippery_aa_positions), # Use 100 to match the GC axis
+                y=[100] * len(slippery_aa_positions),
                 name='Slippery Sites',
-                marker_color='#FFD700',
+                marker_color='#FFD700',  # Gold color for visibility
                 opacity=0.6,
                 width=0.8,
                 hovertemplate='<b>Position:</b> %{x}<br>Motif: %{customdata}<extra></extra>',
@@ -1061,16 +848,14 @@ def create_interactive_cai_gc_overlay_plot(
             secondary_y=True,
         )
 
+    # Set up axes
     fig.update_xaxes(
         title_text="Amino Acid Position",
-        range=[1, len(amino_acids) + 1],  # Ensure x-axis starts at 1 and covers all positions
-        fixedrange=True  # Prevent zooming out beyond data limits
+        range=[1, len(amino_acids) + 1],  # Start at 1, not 0
+        fixedrange=True  # Don't let user zoom out past data limits
     )
 
-    # Primary Y-axis for CAI
     fig.update_yaxes(title_text="CAI Weight", secondary_y=False, range=[0, 1])
-
-    # Secondary Y-axis for GC Content and event markers
     fig.update_yaxes(
         title_text="GC Content (%) / Events", 
         secondary_y=True, 
@@ -1116,42 +901,11 @@ def display_stateful_overlay_chart(positions, cai_weights, amino_acids, sequence
     color=cai_color
 )
 
-    # 2. Convert the figure to a self-contained HTML block.
-    # This packages all the necessary JavaScript and data into one string.
+    
     chart_html = overlay_fig.to_html(full_html=False, include_plotlyjs='cdn')
 
-    # 3. Render the HTML using st.components.v1.html.
-    # This creates a sandboxed iframe, isolating the chart's state from Streamlit.
+
     components.html(chart_html, height=550, scrolling=True)
-
-# Validation of final CDS (before adding UTRs)
-def validate_final_coding_sequence(full_coding_dna):
-    STANDARD_STOP_CODONS = {"TAA", "TAG", "TGA"}
-    problems = []
-
-    # 1. Check start codon
-    if not full_coding_dna.startswith("ATG"):
-        problems.append("⚠️ CDS does not start with an ATG start codon.")
-
-    # 2. Check for in-frame stop codons before the final codons
-    internal_sequence = full_coding_dna[:-6]  # Exclude last 2 codons (6 bases)
-    for i in range(0, len(internal_sequence) - 2, 3):
-        codon = internal_sequence[i:i+3]
-        if codon in STANDARD_STOP_CODONS:
-            problems.append(f"❌ Premature stop codon ({codon}) found at position {i+1}-{i+3}.")
-            break
-
-    # 3. Check if it ends with exactly two stop codons (no more, no less)
-    final_codons = [full_coding_dna[-6:-3], full_coding_dna[-3:]]
-    if not all(c in STANDARD_STOP_CODONS for c in final_codons):
-        problems.append(f"❌ Final two codons are not valid stop codons: {final_codons}")
-    elif len(full_coding_dna) >= 9:
-        third_last_codon = full_coding_dna[-9:-6]
-        if third_last_codon in STANDARD_STOP_CODONS:
-            problems.append(f"❌ More than two stop codons at the end. Found extra stop codon before the final two: {third_last_codon}")
-
-    return problems
-
 
 def create_interactive_cai_slippery_plot(positions, cai_weights, amino_acids, slippery_positions, seq_name, color='#4ECDC4'):
     """Create interactive plot combining CAI weights and slippery motif locations"""
@@ -1426,207 +1180,6 @@ def get_codon_gc_content(codon):
         return 0
     return (codon.upper().count('G') + codon.upper().count('C')) / 3.0 * 100
 
-def adjust_gc_content(sequence, max_gc=70.0, min_gc=55.0):
-    """
-    Adjusts the GC content of a sequence to be within a target range by using synonymous codons.
-    Prioritizes swapping high-GC codons for low-GC codons.
-    """
-    # Check if codon data is loaded
-    if not st.session_state.genetic_code or not st.session_state.aa_to_codons:
-        st.error("Codon usage data not loaded. Cannot adjust GC content.")
-        return sequence
-
-    current_gc = calculate_gc_content(sequence)
-    if current_gc <= max_gc:
-        st.info(f"Initial GC content ({current_gc:.1f}%) is already within the target range (<= {max_gc}%). No adjustment needed.")
-        return sequence
-
-    codons = [sequence[i:i+3] for i in range(0, len(sequence), 3)]
-    new_codons = list(codons)
-    
-    # Create a list of potential swaps, prioritized by GC content reduction
-    potential_swaps = []
-    for i, codon in enumerate(codons):
-        aa = st.session_state.genetic_code.get(codon)
-        if not aa or aa == '*':
-            continue
-
-        current_codon_gc = get_codon_gc_content(codon)
-        
-        # Find synonymous codons with lower GC content
-        for syn_codon, freq in st.session_state.aa_to_codons.get(aa, []):
-            syn_codon_gc = get_codon_gc_content(syn_codon)
-            if syn_codon_gc < current_codon_gc:
-                gc_reduction = current_codon_gc - syn_codon_gc
-                # Store index, new codon, and the reduction amount for prioritization
-                potential_swaps.append({'index': i, 'new_codon': syn_codon, 'reduction': gc_reduction, 'original_codon': codon})
-
-    # Sort swaps by the amount of GC reduction (descending)
-    potential_swaps.sort(key=lambda x: x['reduction'], reverse=True)
-
-    # Apply swaps until GC content is acceptable
-    swapped_indices = set()
-    for swap in potential_swaps:
-        if current_gc <= max_gc:
-            break # Stop if we've reached the target
-        
-        idx = swap['index']
-        if idx not in swapped_indices:
-            new_codons[idx] = swap['new_codon']
-            swapped_indices.add(idx)
-            # Recalculate GC content after the swap
-            current_gc = calculate_gc_content("".join(new_codons))
-
-    final_sequence = "".join(new_codons)
-    final_gc = calculate_gc_content(final_sequence)
-    st.success(f"GC content adjusted from {calculate_gc_content(sequence):.1f}% to {final_gc:.1f}%")
-    
-    return final_sequence
-
-def enforce_local_gc_content(sequence, target_max_gc=70.0, window_size=10, step_size=1):
-    """
-    Enforces local GC content by adjusting codons in windows exceeding target_max_gc.
-    Attempts to maintain protein sequence.
-    """
-    if not st.session_state.aa_to_codons or not st.session_state.genetic_code:
-        st.error("Codon usage data not loaded. Cannot enforce local GC adjustment.")
-        return sequence
-
-    current_sequence = list(sequence) # Convert to list for mutability
-    original_protein = translate_dna("".join(current_sequence))
-    changes_made = 0
-
-    # Iterate and adjust
-    for i in range(0, len(current_sequence) - window_size + 1, step_size):
-        window_start = i
-        window_end = i + window_size
-        window_seq = "".join(current_sequence[window_start:window_end])
-        
-        local_gc = calculate_gc_content(window_seq) # Use the existing calculate_gc_content for the window
-
-        if local_gc > target_max_gc:
-            # Identify codons within this window that can be swapped
-            # This is the most complex part:
-            # 1. Find codons in the window.
-            # 2. For each codon, find synonymous codons with lower GC content.
-            # 3. Prioritize swaps that reduce GC and are within the window.
-            # 4. Apply swap and re-check local GC.
-            
-            # For simplicity in this first pass, let's try a greedy approach:
-            # Iterate through codons in the window and try to swap them if they are high GC
-            
-            # Map nucleotide position to codon index
-            codon_indices_in_window = set()
-            for bp_idx in range(window_start, window_end):
-                codon_idx = bp_idx // 3
-                codon_indices_in_window.add(codon_idx)
-
-            # Sort to ensure consistent processing
-            sorted_codon_indices = sorted(list(codon_indices_in_window))
-
-            for codon_idx in sorted_codon_indices:
-                codon_start_bp = codon_idx * 3
-                codon_end_bp = codon_start_bp + 3
-
-                # Ensure the codon is fully within the original sequence bounds
-                if codon_end_bp <= len(sequence):
-                    original_codon = "".join(current_sequence[codon_start_bp:codon_end_bp])
-                    aa = st.session_state.genetic_code.get(original_codon)
-
-                    if aa and aa != '*': # Don't optimize stop codons
-                        original_codon_gc = get_codon_gc_content(original_codon)
-                        
-                        best_syn_codon = original_codon
-                        max_gc_reduction = 0
-
-                        # Find a synonymous codon with lower GC
-                        for syn_c, _ in st.session_state.aa_to_codons.get(aa, []):
-                            syn_c_gc = get_codon_gc_content(syn_c)
-                            if syn_c_gc < original_codon_gc:
-                                if (original_codon_gc - syn_c_gc) > max_gc_reduction:
-                                    max_gc_reduction = original_codon_gc - syn_c_gc
-                                    best_syn_codon = syn_c
-                        
-                        if best_syn_codon != original_codon:
-                            # Temporarily apply the swap and check if it helps the local GC
-                            temp_sequence_list = list(current_sequence)
-                            temp_sequence_list[codon_start_bp:codon_end_bp] = list(best_syn_codon)
-                            
-                            temp_window_seq = "".join(temp_sequence_list[window_start:window_end])
-                            temp_local_gc = calculate_gc_content(temp_window_seq)
-
-                            if temp_local_gc <= target_max_gc: # If this swap fixes the window
-                                current_sequence[codon_start_bp:codon_end_bp] = list(best_syn_codon)
-                                changes_made += 1
-                                # Re-check the current window's GC after a change
-                                local_gc = calculate_gc_content("".join(current_sequence[window_start:window_end]))
-                                if local_gc <= target_max_gc:
-                                    break # Move to next window if this one is fixed
-                            # else: # If the swap doesn't fix it, try another codon in the window or move on
-    
-    final_sequence = "".join(current_sequence)
-    final_protein = translate_dna(final_sequence)
-
-    if original_protein != final_protein:
-        st.warning("Local GC adjustment changed protein sequence. Reverting to original CDS.")
-        return sequence # Revert if protein sequence changed
-
-    if changes_made > 0:
-        st.success(f"Local GC content adjusted. {changes_made} codon swaps performed.")
-    else:
-        st.info("No local GC content adjustments needed or possible.")
-    
-    return final_sequence
-
-def generate_detailed_mrna_summary(processed_cds, final_mrna_sequence, utr_5, utr_3):
-    """Generate a detailed summary DataFrame for the designed mRNA."""
-    
-    # Basic lengths
-    summary_data = {
-        "Metric": ["Final mRNA Length", "5' UTR Length", "CDS Length", "3' UTR Length"],
-        "Value": [f"{len(final_mrna_sequence)} bp", f"{len(utr_5)} bp", f"{len(processed_cds)} bp", f"{len(utr_3)} bp"]
-    }
-    
-    # GC Content
-    summary_data["Metric"].append("CDS GC Content")
-    summary_data["Value"].append(f"{calculate_gc_content(processed_cds):.1f}%")
-    
-    # CAI
-    cai_weights, _ = get_codon_weights_row(processed_cds)
-    if cai_weights:
-        summary_data["Metric"].extend(["Average CAI", "Sequence Length"])
-        summary_data["Value"].extend([
-            f"{sum(cai_weights)/len(cai_weights):.3f}",
-            f"{len(processed_cds)} bp"
-        ])
-
-    # +1 Stops
-    plus1_stops = number_of_plus1_stops(processed_cds)
-    summary_data["Metric"].extend(["+1 Total Stops", "+1 TAA", "+1 TAG", "+1 TGA"])
-    summary_data["Value"].extend([
-        plus1_stops['total'],
-        plus1_stops['TAA'],
-        plus1_stops['TAG'],
-        plus1_stops['TGA']
-    ])
-
-    # -1 Stops
-    minus1_stops = number_of_minus1_stops(processed_cds)
-    summary_data["Metric"].extend(["-1 Total Stops", "-1 TAA", "-1 TAG", "-1 TGA"])
-    summary_data["Value"].extend([
-        minus1_stops['total'],
-        minus1_stops['TAA'],
-        minus1_stops['TAG'],
-        minus1_stops['TGA']
-    ])
-
-    # Slippery Motifs
-    slippery_count = number_of_slippery_motifs(utr_5 + processed_cds)
-    summary_data["Metric"].append("Slippery Motifs")
-    summary_data["Value"].append(slippery_count)
-    
-    return pd.DataFrame(summary_data)
-
 def calculate_stops_per_100bp(sequence, plus1_stops):
     """Calculate +1 frame stops per 100bp"""
     if not sequence:
@@ -1649,27 +1202,6 @@ def translate_dna(seq):
         protein += aa
     return protein
 
-def reverse_translate_highest_cai(protein_seq):
-    """Reverse translates a protein sequence into DNA using the highest CAI codons."""
-    if not st.session_state.preferred_codons:
-        st.error("Codon usage data not loaded. Cannot reverse translate.")
-        return ""
-    
-    dna_seq = ""
-    for aa in protein_seq:
-        # Handle stop codons if they appear in the protein sequence (e.g., from a partial sequence)
-        if aa == '*':
-            # Use TAA as a default stop codon for reverse translation
-            dna_seq += "TAA"
-        else:
-            codon = st.session_state.preferred_codons.get(aa)
-            if codon:
-                dna_seq += codon
-            else:
-                # Fallback if no preferred codon found (should not happen for standard AAs)
-                st.warning(f"No preferred codon found for amino acid: {aa}. Using NNN.")
-                dna_seq += "NNN" # NNN for unknown codon
-    return dna_seq
 
 def codon_optimize(protein_seq):
     """Standard codon optimization using most frequent codons"""
@@ -1725,8 +1257,7 @@ def number_of_plus1_stops(dna_seq):
     stop_codons_set = {"TAA", "TAG", "TGA"}
     
     counts = Counter()
-    # Iterate through the sequence starting from the 1st base (0-indexed)
-    # and check codons in the +1 frame (offset by 1 base)
+
     for i in range(1, len(dna_seq_upper) - 2, 3):
         codon = dna_seq_upper[i:i+3]
         if codon in stop_codons_set:
@@ -1741,8 +1272,7 @@ def number_of_minus1_stops(dna_seq):
     stop_codons_set = {"TAA", "TAG", "TGA"}
     
     counts = Counter()
-    # Iterate through the sequence starting from the 2nd base (0-indexed)
-    # and check codons in the -1 frame (offset by 2 bases)
+
     for i in range(2, len(dna_seq_upper) - 2, 3):
         codon = dna_seq_upper[i:i+3]
         if codon in stop_codons_set:
@@ -1778,7 +1308,7 @@ def get_minus1_stop_positions(dna_seq):
     return positions
 
 def balanced_optimisation(dna_seq, bias_weight_input=None):
-    """Balanced optimization considering codon usage and +1 frame stops"""
+    """Uses EXACT original equation and bonus system but compares options at each position to avoid skipping"""
     bias_weight = bias_weight_input if bias_weight_input is not None else st.session_state.config.get("bias_weight", BIAS_WEIGHT_DEFAULT)
     
     dna_seq_upper = dna_seq.upper()
@@ -1791,72 +1321,164 @@ def balanced_optimisation(dna_seq, bias_weight_input=None):
         codon = dna_seq_upper[i:i+3]
         protein_str += genetic_code.get(codon, str(Seq(codon).translate()))
     
+    def get_highest_freq_codon(amino_acid):
+        """Get the highest frequency codon for an amino acid"""
+        if amino_acid in aa_to_codons and aa_to_codons[amino_acid]:
+            return max(aa_to_codons[amino_acid], key=lambda x: x[1])[0]
+        else:
+            for codon, aa in genetic_code.items():
+                if aa == amino_acid:
+                    return codon
+            return "NNN"
+    
+    def get_canonical_future_sequence(protein_remainder):
+        """Convert remaining protein to canonical codons"""
+        canonical = ""
+        for aa in protein_remainder:
+            canonical += get_highest_freq_codon(aa)
+        return canonical
+    
+    def calculate_original_bonus(temp_seq, current_pos, num_codons):
+        """
+        EXACT original bonus calculation:
+        - Single codon: check position current_pos + 1, bonus = 1 if stop, 0 otherwise
+        - Two codon: check positions current_pos + 1 and current_pos + 4
+                    bonus = 2 if both stops, 1 if one stop, 0 if no stops
+        """
+        if num_codons == 1:
+            # Single codon: check only current_pos + 1
+            plus1_pos = current_pos + 1
+            if plus1_pos + 3 <= len(temp_seq):
+                codon_plus1 = temp_seq[plus1_pos:plus1_pos+3]
+                if codon_plus1 in PLUS1_STOP_CODONS:
+                    return 1
+            return 0
+        
+        elif num_codons == 2:
+            # Two codon: check current_pos + 1 and current_pos + 4
+            plus1_pos1 = current_pos + 1
+            plus1_pos2 = current_pos + 4
+            
+            stop1 = False
+            stop2 = False
+            
+            if plus1_pos1 + 3 <= len(temp_seq):
+                codon1_plus1 = temp_seq[plus1_pos1:plus1_pos1+3]
+                if codon1_plus1 in PLUS1_STOP_CODONS:
+                    stop1 = True
+            
+            if plus1_pos2 + 3 <= len(temp_seq):
+                codon2_plus1 = temp_seq[plus1_pos2:plus1_pos2+3]
+                if codon2_plus1 in PLUS1_STOP_CODONS:
+                    stop2 = True
+            
+            # Original bonus system: 2 for both, 1 for one, 0 for none
+            if stop1 and stop2:
+                return 2
+            elif stop1 or stop2:
+                return 1
+            else:
+                return 0
+        
+        return 0
+    
+    def evaluate_single_codon(idx, current_optimised, aa):
+        """Evaluate single codon using EXACT original equation"""
+        if aa not in aa_to_codons:
+            current_codon = dna_seq_upper[idx:idx+3]
+            return current_codon, 0
+        
+        remaining_protein = protein_str[len(current_optimised)//3 + 1:]
+        canonical_future = get_canonical_future_sequence(remaining_protein)
+        
+        best_codon = dna_seq_upper[idx:idx+3]
+        best_score = -1
+        
+        # Get current codon frequency for baseline
+        current_codon = dna_seq_upper[idx:idx+3]
+        current_freq = 0
+        for syn_c, freq_val in aa_to_codons[aa]:
+            if syn_c == current_codon:
+                current_freq = freq_val
+                break
+        
+        # Calculate baseline score for current codon
+        temp_seq_orig = current_optimised + current_codon + canonical_future
+        bonus_orig = calculate_original_bonus(temp_seq_orig, len(current_optimised), 1)
+        baseline_score = current_freq + bias_weight * bonus_orig
+        best_score = baseline_score
+        
+        for syn_codon, freq in aa_to_codons[aa]:
+            temp_seq = current_optimised + syn_codon + canonical_future
+            
+            # EXACT ORIGINAL EQUATION: score = frequency + bias_weight * bonus
+            bonus = calculate_original_bonus(temp_seq, len(current_optimised), 1)
+            score = freq + bias_weight * bonus
+            
+            # Deterministic tie-breaking (same as original)
+            if score > best_score or (score == best_score and syn_codon < best_codon):
+                best_score = score
+                best_codon = syn_codon
+        
+        return best_codon, best_score
+    
+    def evaluate_two_codon(idx, current_optimised, aa1, aa2):
+        """Evaluate two-codon using EXACT original equation"""
+        if aa1 not in aa_to_codons or aa2 not in aa_to_codons:
+            return None, None, -1
+        
+        remaining_protein = protein_str[len(current_optimised)//3 + 2:]
+        canonical_future = get_canonical_future_sequence(remaining_protein)
+        
+        best_c1, best_c2 = None, None
+        best_score = -1
+        
+        for c1, f1 in aa_to_codons[aa1]:
+            for c2, f2 in aa_to_codons[aa2]:
+                temp_seq = current_optimised + c1 + c2 + canonical_future
+                
+                # EXACT ORIGINAL EQUATION: score = (f1 * f2) + bias_weight * bonus
+                bonus = calculate_original_bonus(temp_seq, len(current_optimised), 2)
+                score = (f1 * f2) + bias_weight * bonus
+                
+                # Deterministic tie-breaking (same as original)
+                if score > best_score or (score == best_score and c1 + c2 < (best_c1 or "") + (best_c2 or "")):
+                    best_score = score
+                    best_c1, best_c2 = c1, c2
+        
+        return best_c1, best_c2, best_score
+    
     optimised_seq = ""
     idx = 0
+    
     while idx < len(dna_seq_upper) - 2:
         current_codon = dna_seq_upper[idx:idx+3]
         aa = genetic_code.get(current_codon, str(Seq(current_codon).translate()))
-
-        if idx < len(dna_seq_upper) - 5:  # Check for two-codon substitutions
-            next_codon_val = dna_seq_upper[idx+3:idx+6]
-            aa2 = genetic_code.get(next_codon_val, str(Seq(next_codon_val).translate()))
-            candidates = []
-            
-            if aa in aa_to_codons and aa2 in aa_to_codons:
-                for c1, f1 in aa_to_codons[aa]:
-                    for c2, f2 in aa_to_codons[aa2]:
-                        combined = c1 + c2
-                        codon1_plus1 = combined[1:4]
-                        bonus = 0
-                        if codon1_plus1 in PLUS1_STOP_CODONS and combined[2:5] in PLUS1_STOP_CODONS:
-                            bonus += 2
-                        elif codon1_plus1 in PLUS1_STOP_CODONS:
-                            bonus += 1
-                        
-                        score = (f1 * f2) + bias_weight * bonus
-                        candidates.append((score, c1, c2))
-            
-            if candidates:
-                _, best1, best2 = max(candidates)
-                optimised_seq += best1 + best2
-                idx += 6
-                continue
         
-        # Single codon substitution
-        best_codon_val = current_codon
-        current_codon_freq = 0
-        for syn_c, freq_val in aa_to_codons.get(aa, []):
-            if syn_c == current_codon:
-                current_codon_freq = freq_val
-                break
+        # ALWAYS evaluate both single and two-codon options at each position
+        single_codon, single_score = evaluate_single_codon(idx, optimised_seq, aa)
+        best_option = ("single", single_codon, single_score, 3)
         
-        temp_seq_orig = optimised_seq + current_codon + dna_seq_upper[idx+3:]
-        plus1_window_orig_start = len(optimised_seq) + 1
-        bonus_orig = 0
-        if plus1_window_orig_start < len(temp_seq_orig) - 2:
-            codon_plus1_orig = temp_seq_orig[plus1_window_orig_start:plus1_window_orig_start+3]
-            if codon_plus1_orig in PLUS1_STOP_CODONS:
-                bonus_orig = bias_weight
-        best_score = current_codon_freq + bonus_orig
-        
-        for syn_codon, freq in aa_to_codons.get(aa, []):
-            temp_seq = optimised_seq + syn_codon + dna_seq_upper[idx+3:]
-            plus1_codon_start_in_temp = len(optimised_seq) + 1
+        # Two codon option (if possible)
+        if idx < len(dna_seq_upper) - 5:
+            next_codon = dna_seq_upper[idx+3:idx+6]
+            aa2 = genetic_code.get(next_codon, str(Seq(next_codon).translate()))
             
-            bonus_val = 0
-            if plus1_codon_start_in_temp < len(temp_seq) - 2:
-                codon_plus1 = temp_seq[plus1_codon_start_in_temp:plus1_codon_start_in_temp+3]
-                if codon_plus1 in PLUS1_STOP_CODONS:
-                    bonus_val = bias_weight
-            
-            score = freq + bonus_val
-            if score > best_score:
-                best_score = score
-                best_codon_val = syn_codon
+            two_c1, two_c2, two_score = evaluate_two_codon(idx, optimised_seq, aa, aa2)
+            if two_score > best_option[2]:
+                best_option = ("two", (two_c1, two_c2), two_score, 6)
         
-        optimised_seq += best_codon_val
-        idx += 3
-
+        # Apply the best option
+        option_type, codons, score, advance = best_option
+        
+        if option_type == "single":
+            optimised_seq += codons
+        elif option_type == "two":
+            optimised_seq += codons[0] + codons[1]
+        
+        idx += advance
+    
+    # Handle remaining nucleotides
     if idx < len(dna_seq_upper):
         optimised_seq += dna_seq_upper[idx:]
     
@@ -1867,17 +1489,168 @@ def balanced_optimisation(dna_seq, bias_weight_input=None):
         final_protein_str += genetic_code.get(codon, str(Seq(codon).translate()))
 
     if final_protein_str != protein_str:
-        logger.error("Protein sequence changed in balanced optimization!")
+        logger.error("Protein sequence changed in original equation no-skipping optimization!")
         return dna_seq_upper
     
     return optimised_seq
 
-standard_table = CodonTable.unambiguous_dna_by_id[1]
-synonymous_codons = defaultdict(list)
-for codon, aa in standard_table.forward_table.items():
-    synonymous_codons[aa].append(codon)
-for stop in standard_table.stop_codons:
-    synonymous_codons["*"].append(stop)
+def MaxStop(dna_seq, debug=False):
+    dna_seq = dna_seq.upper()
+    original_seq = Seq(dna_seq)
+    protein = str(original_seq.translate(to_stop=False))
+    
+    # Use the same codon tables as balanced optimization
+    genetic_code = st.session_state.genetic_code
+    aa_to_codons = st.session_state.aa_to_codons
+    
+    # Convert aa_to_codons to synonymous_codons format for compatibility
+    synonymous_codons = {}
+    for aa, codon_freq_list in aa_to_codons.items():
+        synonymous_codons[aa] = [codon for codon, freq in codon_freq_list]
+    
+    # Add stop codons if not present
+    if '*' not in synonymous_codons:
+        synonymous_codons['*'] = ['TAA', 'TAG', 'TGA']
+    
+    def get_adenosine_start_codons(aa):
+        """Get codons for amino acid that START with adenosine (A)"""
+        if aa not in synonymous_codons:
+            return []
+        return [codon for codon in synonymous_codons[aa] if codon.startswith('A')]
+    
+    def count_all_plus1_stops(sequence):
+        """Count ALL +1 frame stops in sequence"""
+        stops = 0
+        for pos in range(1, len(sequence) - 2, 3):
+            codon = sequence[pos:pos+3]
+            if len(codon) == 3 and codon in {"TAA", "TAG"}:
+                stops += 1
+                if debug:
+                    print(f"    +1 stop '{codon}' at position {pos}")
+        return stops
+    
+    def get_canonical_future(protein_remainder):
+        """Convert remaining protein to canonical codons"""
+        canonical = ""
+        for aa in protein_remainder:
+            if aa in synonymous_codons and synonymous_codons[aa]:
+                canonical += synonymous_codons[aa][0]
+            else:
+                canonical += "AAA"  # Fallback
+        canonical += "AAAAAAAAAA"  # Extra padding
+        return canonical
+    
+    def find_best_codon_for_position(pos_i, current_optimised_seq, protein_seq):
+        """Find the best single codon for position i, considering all strategies"""
+        codon = dna_seq[pos_i:pos_i+3]
+        aa = str(Seq(codon).translate())
+        current_protein_pos = len(current_optimised_seq) // 3
+        
+        if debug:
+            print(f"\nPosition {pos_i} (protein pos {current_protein_pos}): {codon} ({aa})")
+        
+        # Get remaining protein for canonical future
+        remaining_protein = protein_seq[current_protein_pos + 1:]
+        canonical_future = get_canonical_future(remaining_protein)
+        
+        best_codon = codon
+        best_stops = -1
+        best_reason = "original"
+        
+        if aa not in synonymous_codons:
+            return codon, "no_synonyms"
+        
+        # STRATEGY 1: Check if this position can create TAA via L/V/I + A-starting pattern
+        if (aa in ['L', 'V', 'I'] and 
+            current_protein_pos + 1 < len(protein_seq) and 
+            pos_i + 5 < len(dna_seq)):
+            
+            next_aa = protein_seq[current_protein_pos + 1]
+            a_start_codons = get_adenosine_start_codons(next_aa)
+            
+            if a_start_codons:
+                if debug:
+                    print(f"  Checking L/V/I + A-starting: {aa} + {next_aa}")
+                
+                # Test all combinations to see if we can create TAA
+                for codon1 in synonymous_codons[aa]:
+                    for codon2 in a_start_codons:
+                        combined = codon1 + codon2
+                        # Check +1 frame positions
+                        plus1_codon1 = combined[1:4]
+                        
+                        if plus1_codon1 == 'TAA':
+                            # Build temp sequence to count total stops
+                            temp_seq = current_optimised_seq + codon1 + canonical_future
+                            total_stops = count_all_plus1_stops(temp_seq)
+                            
+                            if debug:
+                                print(f"    TAA opportunity: {codon1} + {codon2} -> {plus1_codon1}, total stops: {total_stops}")
+                            
+                            if total_stops > best_stops:
+                                best_stops = total_stops
+                                best_codon = codon1
+                                best_reason = f"TAA_pattern_with_{codon2}"
+        
+        # STRATEGY 2: Try all synonymous codons for this position
+        for syn_codon in synonymous_codons[aa]:
+            temp_seq = current_optimised_seq + syn_codon + canonical_future
+            total_stops = count_all_plus1_stops(temp_seq)
+            
+            if total_stops > best_stops:
+                best_stops = total_stops
+                best_codon = syn_codon
+                best_reason = "max_stops"
+        
+        if debug:
+            print(f"  Best choice: {best_codon} (reason: {best_reason}, total stops: {best_stops})")
+        
+        return best_codon, best_reason
+    
+    # MAIN OPTIMIZATION LOOP - ALWAYS STEP 3 NUCLEOTIDES
+    optimised_seq = ""
+    i = 0
+    
+    while i < len(dna_seq) - 2:
+        best_codon, reason = find_best_codon_for_position(i, optimised_seq, protein)
+        optimised_seq += best_codon
+        
+        if debug:
+            current_stops = count_all_plus1_stops(optimised_seq)
+            print(f"  Added: {best_codon} (total stops so far: {current_stops})")
+        
+        # ALWAYS ADVANCE BY EXACTLY 3 NUCLEOTIDES
+        i += 3
+    
+    # Handle remaining nucleotides
+    if i < len(dna_seq):
+        optimised_seq += dna_seq[i:]
+    
+    # Final verification
+    final_protein = str(Seq(optimised_seq).translate(to_stop=False))
+    assert final_protein == protein, f"Protein changed! Original: {protein}, Final: {final_protein}"
+    
+    if debug:
+        final_stops = count_all_plus1_stops(optimised_seq)
+        print(f"\nFINAL: {final_stops} total +1 stops")
+        
+        # Show all +1 stops found
+        print("All +1 frame stops found:")
+        for pos in range(1, len(optimised_seq) - 2, 3):
+            codon = optimised_seq[pos:pos+3]
+            if len(codon) == 3 and codon in {"TAA", "TAG"}:
+                print(f"  {codon} at position {pos}")
+    
+    return optimised_seq
+
+def isolated_maxstop_from_terminal(dna_seq_input, debug=False):
+    """
+    Wrapper that calls MaxStop and stores result
+    """
+    optimised_dna = MaxStop(dna_seq_input, debug=debug)
+    st.session_state['maxstop_result_seq'] = optimised_dna
+    return optimised_dna
+
 
 
 
@@ -1930,1325 +1703,6 @@ def JT_Plus1_Stop_Optimized(seq_input):
     out_seq += seq[idx:]
     return out_seq
 
-
-
-
-class NCBISearchEngine:
-    def __init__(self):
-        self.serper_api_key = os.getenv('SERPER_API_KEY')
-        self.base_url = "https://www.ncbi.nlm.nih.gov"
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        })
-        self.anthropic_api_key = os.getenv('ANTHROPIC_API')
-        self.anthropic = Anthropic(api_key=self.anthropic_api_key) if self.anthropic_api_key else None
-    
-    def search_nucleotide_sequences(self, query: str, max_results: int = 10, quoted_terms: List[str] = None) -> List[Dict]:
-        """Search NCBI nucleotide database using Google search with two-pass filtering"""
-        if not self.serper_api_key:
-            st.error("SERPER API key is required for NCBI search. Please check your .env file.")
-            return []
-        
-        # Two-pass approach
-        # Pass 1: Search using the entire query to find relevant candidates
-        st.write(f"🔍 **Pass 1:** Searching for candidates matching entire query")
-            
-        try:
-            url = "https://google.serper.dev/search"
-            ncbi_query = f"site:ncbi.nlm.nih.gov/nuccore {query}"
-            
-            payload = {"q": ncbi_query, "num": max_results * 3}  # Get more candidates for filtering
-            headers = {'X-API-KEY': self.serper_api_key, 'Content-Type': 'application/json'}
-            
-            response = requests.post(url, json=payload, headers=headers, timeout=30)
-            
-            if response.status_code == 403:
-                st.error("SERPER API Key is invalid or doesn't have permission")
-                return []
-            elif response.status_code != 200:
-                st.error(f"API Error: {response.status_code} - {response.text}")
-                return []
-            
-            search_results = response.json().get('organic', [])
-            candidates = []
-            
-            for result in search_results:
-                try:
-                    title = result.get('title', '')
-                    link = result.get('link', '')
-                    snippet = result.get('snippet', '')
-                    
-                    accession = self.extract_accession_number(link, title)
-                    clean_title = title.replace(' - Nucleotide - NCBI', '').replace(' - NCBI', '').strip()
-                    
-                    candidates.append({
-                        'title': clean_title,
-                        'accession': accession,
-                        'description': snippet,
-                        'link': link
-                    })
-                except Exception as e:
-                    continue
-            
-            st.write(f"✅ **Pass 1 complete:** Found {len(candidates)} candidate sequences")
-            
-            # Pass 2: If quoted terms exist, filter candidates by relevance to the full query
-            if quoted_terms:
-                st.write(f"🎯 **Pass 2:** Filtering candidates for relevance (before CDS analysis)")
-                filtered_candidates = []
-                
-                for candidate in candidates:
-                    # Check if the candidate is relevant to the overall query context
-                    searchable_text = f"{candidate['title']} {candidate['description']}".lower()
-                    
-                    # Simple relevance scoring - must contain some key terms from the query
-                    query_words = [word.strip().lower() for word in query.replace('"', '').split() if len(word.strip()) > 2]
-                    
-                    # Count how many query words appear in the candidate
-                    matches = sum(1 for word in query_words if word in searchable_text)
-                    relevance_score = matches / len(query_words) if query_words else 0
-                    
-                    # Keep candidates with reasonable relevance (at least 30% of query words)
-                    if relevance_score >= 0.3:
-                        candidate['relevance_score'] = relevance_score
-                        filtered_candidates.append(candidate)
-                
-                # Sort by relevance score
-                filtered_candidates.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
-                
-                # Take top candidates up to max_results
-                results = filtered_candidates[:max_results]
-                
-                st.write(f"✅ **Pass 2 complete:** {len(results)} relevant candidates selected for CDS analysis")
-                
-                if len(results) < len(candidates):
-                    st.write(f"📊 **Filtered out:** {len(candidates) - len(results)} less relevant candidates")
-            else:
-                # No quoted terms, just take top results
-                results = candidates[:max_results]
-                st.write(f"ℹ️ **No quoted terms:** Taking top {len(results)} candidates")
-            
-            return results
-            
-        except Exception as e:
-            st.error(f"Error searching NCBI: {str(e)}")
-            return []
-    
-    def extract_accession_number(self, link: str, title: str) -> str:
-        """Extract accession number from NCBI link or title"""
-        try:
-            if '/nuccore/' in link:
-                parts = link.split('/nuccore/')
-                if len(parts) > 1:
-                    accession = parts[1].split('/')[0].split('?')[0]
-                    return accession
-            
-            patterns = [
-                r'\b([A-Z]{1,2}\d{5,8})\b',
-                r'\b([A-Z]{2}_\d{6,9})\b',
-                r'\b([A-Z]{3}\d{5})\b',
-                r'\b([A-Z]{1}\d{5})\b',
-            ]
-            
-            for pattern in patterns:
-                match = re.search(pattern, title)
-                if match:
-                    return match.group(1)
-            
-            return ""
-        except:
-            return ""
-
-    def scrape_ncbi_page(self, accession: str, original_query: str = "") -> Dict:
-        """Get NCBI data using structured formats with quote-based filtering"""
-        try:
-            result = {
-                'accession': accession,
-                'url': f"{self.base_url}/nuccore/{accession}",
-                'success': True,
-                'cds_sequences': [],
-                'organism': '',
-                'definition': '',
-                'length': 0,
-                'filtered_terms': []
-            }
-            
-            st.write(f"🔍 **Getting structured data for {accession}**")
-            
-            # Extract quoted terms for filtering
-            quoted_terms = self.extract_quoted_terms(original_query)
-            if quoted_terms:
-                st.write(f"🎯 **Filtering for quoted terms:** {', '.join(quoted_terms)}")
-                result['filtered_terms'] = quoted_terms
-            
-            # Step 1: Get data (GenBank or FASTA format)
-            raw_data = self.get_genbank_format(accession)
-            
-            if raw_data:
-                st.write(f"✅ **Data retrieved:** {len(raw_data)} characters")
-                
-                # Check if we got FASTA format instead of GenBank
-                if raw_data.startswith('FASTA_FORMAT\n'):
-                    st.write(f"📄 **Processing FASTA format data**")
-                    fasta_content = raw_data[13:]  # Remove "FASTA_FORMAT\n" prefix
-                    result = self.process_fasta_data(fasta_content, accession)
-                    
-                    # Apply filtering to FASTA data if needed
-                    if quoted_terms and result.get('cds_sequences'):
-                        original_count = len(result['cds_sequences'])
-                        filtered_cds = []
-                        
-                        for cds in result['cds_sequences']:
-                            # For FASTA, check if the header contains the quoted terms
-                            header = cds.get('header', '').lower()
-                            definition = result.get('definition', '').lower()
-                            
-                            matches = any(term in header or term in definition for term in quoted_terms)
-                            if matches:
-                                filtered_cds.append(cds)
-                        
-                        result['cds_sequences'] = filtered_cds
-                        st.write(f"🎯 **Filtered FASTA results:** {original_count} → {len(filtered_cds)} sequences")
-                    
-                else:
-                    st.write(f"📄 **Processing GenBank format data**")
-                    
-                    # Extract metadata
-                    metadata = self.parse_genbank_metadata(raw_data)
-                    result.update(metadata)
-                    
-                    # Extract ORIGIN sequence
-                    origin_sequence = self.extract_origin_from_genbank(raw_data)
-                    
-                    if origin_sequence:
-                        st.write(f"✅ **ORIGIN sequence:** {len(origin_sequence)} bases")
-                        st.write(f"**Sample:** {origin_sequence[:50]}...")
-
-                    
-                    if origin_sequence:
-                        st.write(f"✅ **ORIGIN sequence:** {len(origin_sequence)} bases")
-                        st.write(f"**Sample:** {origin_sequence[:50]}...")
-
-                    
-                    if origin_sequence:
-                        st.write(f"✅ **ORIGIN sequence:** {len(origin_sequence)} bases")
-                        st.write(f"**Sample:** {origin_sequence[:50]}...")
-                        
-                        # Extract CDS features with filtering
-                        cds_features = self.parse_cds_features_from_genbank(raw_data, origin_sequence, accession, quoted_terms)
-                        
-                        # Strict filtering: if quoted terms provided and NO CDS match, reject the entire entry
-                        if quoted_terms and not cds_features:
-                            st.write(f"❌ **REJECTED:** No CDS matching '{', '.join(quoted_terms)}' - skipping entry**")
-                            return {
-                                'accession': accession,
-                                'success': False,
-                                'error': f"No CDS found matching quoted terms: {', '.join(quoted_terms)}",
-                                'cds_sequences': [],
-                                'filtered_terms': quoted_terms
-                            }
-                        
-                        result['cds_sequences'] = cds_features
-                        
-                        if cds_features:
-                            st.write(f"✅ **Found {len(cds_features)} matching CDS features**")
-                            for i, cds in enumerate(cds_features):
-                                st.write(f"  - {cds['protein_name']} ({cds['start_position']}-{cds['end_position']}, {cds['length']} bp)")
-                        else:
-                            st.write("❌ **No CDS features found in GenBank data**")
-                    else:
-                        st.write("❌ **No ORIGIN sequence found - trying FASTA fallback**")
-                        result = self.fallback_fasta_approach(accession)
-            else:
-                st.write("❌ **Failed to retrieve any data**")
-                result = self.fallback_fasta_approach(accession)
-            
-            return result
-            
-        except Exception as e:
-            st.error(f"Error processing {accession}: {str(e)}")
-            return {
-                'accession': accession,
-                'success': False,
-                'error': str(e),
-                'cds_sequences': []
-            }
-        
-        
-    def extract_quoted_terms(self, query: str) -> List[str]:
-        """Extract terms in quotes from the search query"""
-        try:
-            # Find all terms in double quotes
-            quoted_terms = re.findall(r'"([^"]+)"', query)
-            
-            # Also look for single quotes as backup
-            if not quoted_terms:
-                quoted_terms = re.findall(r"'([^']+)'", query)
-            
-            # Clean and normalize terms
-            cleaned_terms = []
-            for term in quoted_terms:
-                cleaned_term = term.strip().lower()
-                if cleaned_term:
-                    cleaned_terms.append(cleaned_term)
-            
-            return cleaned_terms
-            
-        except Exception as e:
-            st.write(f"❌ **Error extracting quoted terms:** {str(e)}")
-            return []
-
-    def matches_quoted_terms(self, cds_info: Dict, quoted_terms: List[str]) -> bool:
-        """Check if a CDS matches any of the quoted terms"""
-        if not quoted_terms:
-            return True  # No filtering if no quoted terms
-        
-        try:
-            # Fields to check for matches (expanded to include more annotation fields)
-            searchable_fields = [
-                cds_info.get('gene_name', '').lower(),
-                cds_info.get('product', '').lower(),
-                cds_info.get('protein_name', '').lower(),
-                cds_info.get('locus_tag', '').lower(),
-                cds_info.get('note', '').lower(),  # Added note field
-                cds_info.get('gene_synonym', '').lower(),  # Added gene synonym
-                cds_info.get('function', '').lower()  # Added function field
-            ]
-            
-            # Check if any quoted term matches any field
-            for term in quoted_terms:
-                for field in searchable_fields:
-                    if field and term in field:
-                        return True
-            
-            return False
-            
-        except Exception as e:
-            st.write(f"❌ **Error checking CDS match:** {str(e)}")
-            return False  # Changed to False - if error, don't match
-
-    def process_fasta_data(self, fasta_content: str, accession: str) -> Dict:
-        """Process FASTA format data"""
-        try:
-            lines = fasta_content.strip().split('\n')
-            if not lines or not lines[0].startswith('>'):
-                raise ValueError("Invalid FASTA format")
-            
-            header = lines[0][1:]  # Remove '>'
-            sequence = ''.join(lines[1:]).upper()
-            
-            # Clean sequence
-            sequence = re.sub(r'[^ATGCN]', '', sequence)
-            
-            if sequence and len(sequence) > 100:  # Reasonable sequence length
-                return {
-                    'accession': accession,
-                    'url': f"{self.base_url}/nuccore/{accession}",
-                    'success': True,
-                    'cds_sequences': [{
-                        'accession': accession,
-                        'protein_name': f"Complete_sequence_{accession}",
-                        'gene_name': '',
-                        'product': 'Complete nucleotide sequence',
-                        'locus_tag': '',
-                        'start_position': 1,
-                        'end_position': len(sequence),
-                        'header': f">{header}",
-                        'sequence': sequence,
-                        'length': len(sequence),
-                        'url': f"{self.base_url}/nuccore/{accession}",
-                        'valid_dna': True
-                    }],
-                    'organism': '',
-                    'definition': header,
-                    'length': len(sequence)
-                }
-            else:
-                raise ValueError("Invalid or too short sequence")
-                
-        except Exception as e:
-            return {
-                'accession': accession,
-                'success': False,
-                'error': str(e),
-                'cds_sequences': []
-            }
-    
-    def get_genbank_format(self, accession: str) -> str:
-        """Get GenBank format data directly using correct URLs"""
-        try:
-            # Use the correct NCBI E-utilities API endpoints that return raw text
-            genbank_urls = [
-                # E-utilities API - most reliable
-                f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id={accession}&rettype=gb&retmode=text",
-                
-                # Alternative E-utilities format
-                f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nucleotide&id={accession}&rettype=genbank&retmode=text",
-                
-                # NCBI sviewer with explicit text format
-                f"https://www.ncbi.nlm.nih.gov/sviewer/viewer.fcgi?tool=portal&sendto=on&log$=seqview&db=nuccore&dopt=genbank&sort=&val={accession}&retmode=text",
-                
-                # Direct nuccore with specific parameters
-                f"https://www.ncbi.nlm.nih.gov/nuccore/{accession}?report=genbank&format=text&retmode=text",
-            ]
-            
-            for url in genbank_urls:
-                try:
-                    time.sleep(1)
-                    response = self.session.get(url, timeout=30)
-                    
-                    if response.status_code == 200:
-                        content = response.text
-                        
-                        # Check if this is actually GenBank format (not HTML)
-                        if content.startswith('<?xml') or content.startswith('<!DOCTYPE'):
-                            continue
-                        
-                        # Check if this looks like GenBank format
-                        if content.startswith('LOCUS') and ('ORIGIN' in content or 'FEATURES' in content):
-                            return content
-                        elif 'LOCUS' in content and 'DEFINITION' in content:
-                            return content
-                        
-                except Exception as e:
-                    continue
-            
-            # If all GenBank URLs fail, try getting FASTA directly here
-            fasta_urls = [
-                f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id={accession}&rettype=fasta&retmode=text",
-                f"https://www.ncbi.nlm.nih.gov/nuccore/{accession}?report=fasta&format=text",
-            ]
-            
-            for url in fasta_urls:
-                try:
-                    time.sleep(1)
-                    response = self.session.get(url, timeout=30)
-                    
-                    if response.status_code == 200:
-                        content = response.text
-                        if content.startswith('>') and not content.startswith('<?xml'):
-                            # Return a special marker so we know this is FASTA
-                            return f"FASTA_FORMAT\n{content}"
-                        
-                except Exception as e:
-                    continue
-            
-            return ""
-            
-        except Exception as e:
-            return ""
-        
-    def parse_genbank_metadata(self, genbank_data: str) -> Dict:
-        """Parse metadata from GenBank format"""
-        metadata = {}
-        
-        try:
-            # Extract definition
-            def_match = re.search(r'DEFINITION\s+(.*?)(?=\nACCESSION|\nVERSION|\nKEYWORDS)', genbank_data, re.DOTALL)
-            if def_match:
-                metadata['definition'] = re.sub(r'\s+', ' ', def_match.group(1).strip())
-            
-            # Extract organism
-            organism_match = re.search(r'ORGANISM\s+(.*?)(?=\n\s*REFERENCE|\n\s*COMMENT|\n\s*FEATURES)', genbank_data, re.DOTALL)
-            if organism_match:
-                organism_text = organism_match.group(1).strip()
-                # Get just the first line (species name)
-                metadata['organism'] = organism_text.split('\n')[0].strip()
-            
-            # Extract length from LOCUS line
-            locus_match = re.search(r'LOCUS\s+\S+\s+(\d+)\s+bp', genbank_data)
-            if locus_match:
-                metadata['length'] = int(locus_match.group(1))
-            
-            return metadata
-            
-        except Exception as e:
-            st.write(f"❌ **Error parsing GenBank metadata:** {str(e)}")
-            return {}
-    
-    def extract_origin_from_genbank(self, genbank_data: str) -> str:
-        """Extract ORIGIN sequence from GenBank format"""
-        try:
-            # Try multiple ORIGIN patterns
-            origin_patterns = [
-                r'ORIGIN\s*(.*?)(?=//)',                    # Original pattern
-                r'ORIGIN\s*(.*?)(?=\n//)',                  # With newline before //
-                r'ORIGIN\s*(.*?)$',                         # Until end of string
-                r'ORIGIN\s*\n(.*?)(?=//)',                  # With explicit newline after ORIGIN
-                r'ORIGIN\s*\n(.*?)(?=\n//)',               # With newlines
-                r'ORIGIN[^\n]*\n(.*?)(?=//)',              # Skip ORIGIN line, start from next line
-            ]
-            
-            origin_text = None
-            
-            for pattern in origin_patterns:
-                try:
-                    match = re.search(pattern, genbank_data, re.DOTALL)
-                    if match:
-                        origin_text = match.group(1)
-                        break
-                except Exception:
-                    continue
-            
-            if not origin_text:
-                # Try a simple substring approach
-                origin_pos = genbank_data.find('ORIGIN')
-                if origin_pos != -1:
-                    origin_section = genbank_data[origin_pos:]
-                    end_pos = origin_section.find('//')
-                    if end_pos != -1:
-                        origin_text = origin_section[6:end_pos]  # Skip "ORIGIN"
-                else:
-                    return ""
-            
-            if not origin_text:
-                return ""
-            
-            # Clean the sequence
-            clean_sequence = ""
-            lines = origin_text.split('\n')
-            
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
-                
-                # Skip lines that don't look like sequence lines
-                if not re.search(r'\d+', line):
-                    continue
-                    
-                # Remove line numbers (first token) and keep DNA bases
-                parts = line.split()
-                if parts:  # Make sure there are parts
-                    for part in parts[1:]:  # Skip first part (line number)
-                        # Keep only DNA bases
-                        dna_bases = re.sub(r'[^ATGCatgcNn]', '', part)
-                        clean_sequence += dna_bases.upper()
-            
-            return clean_sequence
-            
-        except Exception as e:
-            return ""
-        
-
-
-
-    def parse_cds_features_from_genbank(self, genbank_data: str, origin_sequence: str, accession: str, quoted_terms: List[str] = None) -> List[Dict]:
-        """Parse CDS features from GenBank format with optional filtering"""
-        cds_sequences = []
-        
-        try:
-            # Find FEATURES section
-            features_match = re.search(r'FEATURES\s+Location/Qualifiers\s*(.*?)(?=ORIGIN|CONTIG|//)', genbank_data, re.DOTALL)
-            
-            if not features_match:
-                st.write("❌ **No FEATURES section found**")
-                return []
-            
-            features_text = features_match.group(1)
-            st.write(f"✅ **Found FEATURES section:** {len(features_text)} characters")
-            
-            # Find CDS features
-            cds_pattern = r'^\s+CDS\s+(.*?)(?=^\s+\w+\s+|\Z)'
-            cds_matches = re.finditer(cds_pattern, features_text, re.MULTILINE | re.DOTALL)
-            
-            total_cds_found = 0
-            filtered_cds_count = 0
-            
-            for i, match in enumerate(cds_matches):
-                try:
-                    total_cds_found += 1
-                    cds_block = match.group(1)
-                    
-                    # Extract location - handle simple ranges and joins
-                    location_line = cds_block.split('\n')[0].strip()
-                    
-                    # Parse coordinates
-                    coordinates = self.parse_cds_coordinates(location_line)
-                    
-                    if coordinates:
-                        start_pos, end_pos = coordinates[0], coordinates[-1]
-                        
-                        # Extract sequence
-                        if len(origin_sequence) >= end_pos:
-                            # For simple ranges, extract directly
-                            if len(coordinates) == 2:
-                                cds_sequence = origin_sequence[start_pos-1:end_pos]
-                            else:
-                                # For complex joins, concatenate segments
-                                cds_sequence = ""
-                                for j in range(0, len(coordinates), 2):
-                                    if j+1 < len(coordinates):
-                                        seg_start, seg_end = coordinates[j], coordinates[j+1]
-                                        cds_sequence += origin_sequence[seg_start-1:seg_end]
-                            
-                            if cds_sequence:
-                                # Extract gene information
-                                gene_info = self.extract_gene_info_from_cds_block(cds_block)
-                                
-                                cds_info = {
-                                    'accession': accession,
-                                    'protein_name': gene_info.get('protein_name', f"CDS_{i+1}"),
-                                    'gene_name': gene_info.get('gene_name', ''),
-                                    'product': gene_info.get('product', ''),
-                                    'locus_tag': gene_info.get('locus_tag', ''),
-                                    'start_position': start_pos,
-                                    'end_position': end_pos,
-                                    'header': f">{accession}:{start_pos}-{end_pos} {gene_info.get('protein_name', f'CDS_{i+1}')}",
-                                    'sequence': cds_sequence,
-                                    'length': len(cds_sequence),
-                                    'url': f"{self.base_url}/nuccore/{accession}",
-                                    'valid_dna': self.is_valid_dna_sequence(cds_sequence)
-                                }
-                                
-                                # Apply filtering if quoted terms are provided
-                                if quoted_terms:
-                                    if self.matches_quoted_terms(cds_info, quoted_terms):
-                                        cds_sequences.append(cds_info)
-                                        filtered_cds_count += 1
-                                        st.write(f"  ✅ **Matched:** {gene_info.get('protein_name', f'CDS_{i+1}')} ({len(cds_sequence)} bp)")
-                                    else:
-                                        st.write(f"  ⏭️ **Skipped:** {gene_info.get('protein_name', f'CDS_{i+1}')} (no match)")
-                                else:
-                                    # No filtering, add all CDS
-                                    cds_sequences.append(cds_info)
-                                    st.write(f"  ✅ **Added:** {gene_info.get('protein_name', f'CDS_{i+1}')} ({len(cds_sequence)} bp)")
-                                    
-                except Exception as e:
-                    st.write(f"  ❌ **Error processing CDS {i+1}:** {str(e)}")
-                    continue
-            
-            # Summary
-            if quoted_terms:
-                st.write(f"🎯 **Filtering summary:** {total_cds_found} total CDS → {filtered_cds_count} matching '{', '.join(quoted_terms)}'**")
-            else:
-                st.write(f"📊 **Total CDS found:** {len(cds_sequences)}")
-            
-            return cds_sequences
-            
-        except Exception as e:
-            st.write(f"❌ **Error parsing CDS features:** {str(e)}")
-            return []
-        
-    def parse_cds_coordinates(self, location_str: str) -> List[int]:
-        """Parse CDS coordinates from location string"""
-        try:
-            coordinates = []
-            
-            # Handle simple range: "266..13483"
-            simple_match = re.match(r'(\d+)\.\.(\d+)', location_str)
-            if simple_match:
-                start = int(simple_match.group(1))
-                end = int(simple_match.group(2))
-                return [start, end]
-            
-            # Handle join: "join(266..13483,13484..21555)"
-            join_match = re.search(r'join\((.*?)\)', location_str)
-            if join_match:
-                segments = join_match.group(1).split(',')
-                for segment in segments:
-                    segment = segment.strip()
-                    range_match = re.match(r'(\d+)\.\.(\d+)', segment)
-                    if range_match:
-                        coordinates.extend([int(range_match.group(1)), int(range_match.group(2))])
-                return coordinates
-            
-            # Handle complement: "complement(266..13483)"
-            comp_match = re.search(r'complement\((\d+)\.\.(\d+)\)', location_str)
-            if comp_match:
-                start = int(comp_match.group(1))
-                end = int(comp_match.group(2))
-                return [start, end]
-            
-            return []
-            
-        except Exception as e:
-            return []
-    
-    def extract_gene_info_from_cds_block(self, cds_block: str) -> Dict:
-        """Extract gene information from CDS feature block with enhanced fields"""
-        gene_info = {
-            'protein_name': '',
-            'gene_name': '',
-            'product': '',
-            'locus_tag': '',
-            'note': '',
-            'gene_synonym': '',
-            'function': ''
-        }
-        
-        try:
-            # Extract gene name
-            gene_match = re.search(r'/gene="([^"]+)"', cds_block)
-            if gene_match:
-                gene_info['gene_name'] = gene_match.group(1)
-                gene_info['protein_name'] = gene_match.group(1)
-            
-            # Extract product (preferred for protein name)
-            product_match = re.search(r'/product="([^"]+)"', cds_block)
-            if product_match:
-                gene_info['product'] = product_match.group(1)
-                gene_info['protein_name'] = product_match.group(1)
-            
-            # Extract locus tag
-            locus_match = re.search(r'/locus_tag="([^"]+)"', cds_block)
-            if locus_match:
-                gene_info['locus_tag'] = locus_match.group(1)
-            
-            # Extract note field (often contains descriptive information)
-            note_match = re.search(r'/note="([^"]+)"', cds_block)
-            if note_match:
-                gene_info['note'] = note_match.group(1)
-            
-            # Extract gene synonym
-            synonym_match = re.search(r'/gene_synonym="([^"]+)"', cds_block)
-            if synonym_match:
-                gene_info['gene_synonym'] = synonym_match.group(1)
-            
-            # Extract function (if present)
-            function_match = re.search(r'/function="([^"]+)"', cds_block)
-            if function_match:
-                gene_info['function'] = function_match.group(1)
-            
-            # If no product or gene, try protein_id
-            if not gene_info['protein_name']:
-                protein_id_match = re.search(r'/protein_id="([^"]+)"', cds_block)
-                if protein_id_match:
-                    gene_info['protein_name'] = protein_id_match.group(1)
-            
-            return gene_info
-            
-        except Exception as e:
-            return gene_info
-    
-    def fallback_fasta_approach(self, accession: str) -> Dict:
-        """Fallback approach using FASTA format"""
-        try:
-            # Try to get FASTA format
-            fasta_urls = [
-                f"{self.base_url}/nuccore/{accession}?report=fasta&format=text",
-                f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id={accession}&rettype=fasta&retmode=text"
-            ]
-            
-            for url in fasta_urls:
-                try:
-                    time.sleep(1)
-                    response = self.session.get(url, timeout=30)
-                    
-                    if response.status_code == 200 and response.text.startswith('>'):
-                        content = response.text
-                        lines = content.split('\n')
-                        header = lines[0]
-                        sequence = ''.join(lines[1:])
-                        
-                        if sequence and self.is_valid_dna_sequence(sequence):
-                            return {
-                                'accession': accession,
-                                'url': f"{self.base_url}/nuccore/{accession}",
-                                'success': True,
-                                'cds_sequences': [{
-                                    'accession': accession,
-                                    'protein_name': f"Full_sequence_{accession}",
-                                    'gene_name': '',
-                                    'product': 'Complete sequence',
-                                    'locus_tag': '',
-                                    'start_position': 1,
-                                    'end_position': len(sequence),
-                                    'header': header,
-                                    'sequence': sequence,
-                                    'length': len(sequence),
-                                    'url': f"{self.base_url}/nuccore/{accession}",
-                                    'valid_dna': True
-                                }],
-                                'organism': '',
-                                'definition': header,
-                                'length': len(sequence)
-                            }
-                            
-                except Exception as e:
-                    continue
-            
-            return {
-                'accession': accession,
-                'success': False,
-                'error': 'Both GenBank and FASTA approaches failed',
-                'cds_sequences': []
-            }
-            
-        except Exception as e:
-            return {
-                'accession': accession,
-                'success': False,
-                'error': str(e),
-                'cds_sequences': []
-            }
-    
-    def is_valid_dna_sequence(self, sequence: str) -> bool:
-        """Check if sequence contains only valid DNA bases"""
-        if not sequence:
-            return False
-        return all(base.upper() in 'ATGCN' for base in sequence)
-    
-    # Keep the existing AI ranking and download methods unchanged
-    def ai_select_best_sequences(self, query: str, sequences_with_cds: List[Dict]) -> List[Dict]:
-        """Use AI to select the most relevant sequences based on the query"""
-        if not self.anthropic or not sequences_with_cds:
-            return sequences_with_cds
-        
-        sequence_summaries = []
-        for i, seq_data in enumerate(sequences_with_cds):
-            cds_info = []
-            for cds in seq_data.get('cds_sequences', []):
-                cds_info.append(f"  - {cds.get('protein_name', 'Unknown')} ({cds.get('start_position', 0)}-{cds.get('end_position', 0)}, {cds.get('length', 0)} bp)")
-            
-            summary = f"""
-Sequence {i+1}:
-- Accession: {seq_data['accession']}
-- Title: {seq_data.get('title', 'N/A')}
-- Definition: {seq_data.get('definition', 'N/A')}
-- Organism: {seq_data.get('organism', 'N/A')}
-- Length: {seq_data.get('length', 0)} bp
-- CDS Count: {len(seq_data.get('cds_sequences', []))}
-- CDS Details:
-{chr(10).join(cds_info) if cds_info else '  - No CDS found'}
-"""
-            sequence_summaries.append(summary)
-        
-        context = "\n".join(sequence_summaries)
-        
-        prompt = f"""
-You are a bioinformatics expert. A user is searching for: "{query}"
-
-Below are the available sequences with their CDS information:
-
-{context}
-
-Please analyze these sequences and rank them by relevance to the user's query. Consider:
-1. How well the organism/title matches the query
-2. The presence and quality of CDS sequences
-3. The biological relevance to the query
-4. The completeness of the sequence data
-
-Return your response as a JSON list of accession numbers in order of relevance (most relevant first), with a brief explanation for each.
-
-Format: {{"rankings": [{{"accession": "XXX", "rank": 1, "reason": "explanation"}}, ...]}}
-"""
-
-        try:
-            message = self.anthropic.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=1000,
-                temperature=0.3,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            
-            response_text = message.content[0].text
-            
-            import json
-            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-            if json_match:
-                rankings_data = json.loads(json_match.group())
-                rankings = rankings_data.get('rankings', [])
-                
-                ordered_sequences = []
-                for ranking in rankings:
-                    accession = ranking['accession']
-                    for seq_data in sequences_with_cds:
-                        if seq_data['accession'] == accession:
-                            seq_data['ai_rank'] = ranking['rank']
-                            seq_data['ai_reason'] = ranking['reason']
-                            ordered_sequences.append(seq_data)
-                            break
-                
-                ranked_accessions = [r['accession'] for r in rankings]
-                for seq_data in sequences_with_cds:
-                    if seq_data['accession'] not in ranked_accessions:
-                        ordered_sequences.append(seq_data)
-                
-                return ordered_sequences
-            
-        except Exception as e:
-            logger.error(f"Error in AI ranking: {e}")
-        
-        return sequences_with_cds
-    
-    def create_cds_download_data(self, sequences_with_cds: List[Dict]) -> pd.DataFrame:
-        """Create downloadable DataFrame with CDS sequences"""
-        download_data = []
-        
-        for seq_data in sequences_with_cds:
-            base_info = {
-                'Accession': seq_data.get('accession', ''),
-                'Title': seq_data.get('title', ''),
-                'Definition': seq_data.get('definition', ''),
-                'Organism': seq_data.get('organism', ''),
-                'Sequence_Length_bp': seq_data.get('length', 0),
-                'NCBI_URL': seq_data.get('url', ''),
-                'Filtered_Terms': ', '.join(seq_data.get('filtered_terms', [])),
-                'AI_Rank': seq_data.get('ai_rank', ''),
-                'AI_Reason': seq_data.get('ai_reason', '')
-            }
-            
-            if seq_data.get('cds_sequences'):
-                for i, cds in enumerate(seq_data['cds_sequences']):
-                    row = base_info.copy()
-                    row.update({
-                        'CDS_Number': i + 1,
-                        'Gene_Name': cds.get('gene_name', ''),
-                        'Protein_Name': cds.get('protein_name', ''),
-                        'Product': cds.get('product', ''),
-                        'Locus_Tag': cds.get('locus_tag', ''),
-                        'Start_Position': cds.get('start_position', 0),
-                        'End_Position': cds.get('end_position', 0),
-                        'CDS_Header': cds.get('header', ''),
-                        'CDS_Sequence': cds.get('sequence', ''),
-                        'CDS_Length_bp': cds.get('length', 0),
-                        'Valid_DNA': cds.get('valid_dna', False),
-                        'CDS_URL': cds.get('url', '')
-                    })
-                    download_data.append(row)
-            else:
-                row = base_info.copy()
-                row.update({
-                    'CDS_Number': 0,
-                    'Gene_Name': 'No matching CDS found',
-                    'Protein_Name': 'No matching CDS found',
-                    'Product': '',
-                    'Locus_Tag': '',
-                    'Start_Position': 0,
-                    'End_Position': 0,
-                    'CDS_Header': '',
-                    'CDS_Sequence': '',
-                    'CDS_Length_bp': 0,
-                    'Valid_DNA': False,
-                    'CDS_URL': ''
-                })
-                download_data.append(row)
-        
-        return pd.DataFrame(download_data)
-
-
-class UniProtSearchEngine:
-    """Enhanced UniProt search engine for protein sequences with CDS data"""
-    
-    def __init__(self):
-        self.base_url = "https://www.uniprot.org"
-        self.api_url = "https://rest.uniprot.org"
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        })
-        self.anthropic_api_key = os.getenv('ANTHROPIC_API')
-        self.anthropic = Anthropic(api_key=self.anthropic_api_key) if self.anthropic_api_key else None
-    
-    def search_protein_sequences(self, query: str, max_results: int = 10) -> List[Dict]:
-        """Search UniProt for protein sequences using REST API"""
-        try:
-            # Prepare search parameters
-            params = {
-                'query': query,
-                'format': 'json',
-                'size': max_results,
-                'fields': 'accession,id,protein_name,gene_names,organism_name,length,reviewed,xref_refseq,xref_embl,sequence'
-            }
-            
-            url = f"{self.api_url}/uniprotkb/search"
-            
-            st.write(f"🔍 **Searching UniProt for:** {query}")
-            
-            response = self.session.get(url, params=params, timeout=30)
-            
-            if response.status_code != 200:
-                st.error(f"UniProt API error: {response.status_code}")
-                return []
-            
-            data = response.json()
-            results = data.get('results', [])
-            
-            st.write(f"✅ **Found {len(results)} UniProt entries**")
-            
-            # Process results
-            processed_results = []
-            for result in results:
-                try:
-                    # Extract basic information
-                    accession = result.get('primaryAccession', '')
-                    protein_name = result.get('proteinDescription', {}).get('recommendedName', {}).get('fullName', {}).get('value', '')
-                    if not protein_name:
-                        protein_name = result.get('proteinDescription', {}).get('submissionNames', [{}])[0].get('fullName', {}).get('value', '')
-                    
-                    gene_names = []
-                    if 'genes' in result:
-                        for gene in result['genes']:
-                            if 'geneName' in gene:
-                                gene_names.append(gene['geneName']['value'])
-                    
-                    organism = result.get('organism', {}).get('scientificName', '')
-                    sequence = result.get('sequence', {}).get('value', '')
-                    length = result.get('sequence', {}).get('length', 0)
-                    reviewed = result.get('entryType', '') == 'UniProtKB reviewed (Swiss-Prot)'
-                    
-                    # Extract cross-references to nucleotide databases
-                    nucleotide_refs = []
-                    if 'uniProtKBCrossReferences' in result:
-                        for xref in result['uniProtKBCrossReferences']:
-                            db_name = xref.get('database', '')
-                            if db_name in ['EMBL', 'RefSeq']:
-                                nucleotide_refs.append({
-                                    'database': db_name,
-                                    'id': xref.get('id', ''),
-                                    'properties': xref.get('properties', [])
-                                })
-                    
-                    processed_results.append({
-                        'accession': accession,
-                        'protein_name': protein_name,
-                        'gene_names': ', '.join(gene_names),
-                        'organism': organism,
-                        'protein_sequence': sequence,
-                        'length': length,
-                        'reviewed': reviewed,
-                        'nucleotide_refs': nucleotide_refs,
-                        'uniprot_url': f"{self.base_url}/uniprotkb/{accession}"
-                    })
-                    
-                except Exception as e:
-                    st.write(f"❌ Error processing UniProt entry: {str(e)}")
-                    continue
-            
-            return processed_results
-            
-        except Exception as e:
-            st.error(f"Error searching UniProt: {str(e)}")
-            return []
-    
-    def get_nucleotide_sequences_from_uniprot(self, uniprot_results: List[Dict], quoted_terms: List[str] = None) -> List[Dict]:
-        """Extract nucleotide sequences from UniProt cross-references"""
-        sequences_with_cds = []
-        
-        for uniprot_entry in uniprot_results:
-            try:
-                # Check if this entry matches quoted terms
-                if quoted_terms and not self.matches_quoted_terms_uniprot(uniprot_entry, quoted_terms):
-                    st.write(f"  ⏭️ **Skipped UniProt {uniprot_entry['accession']}:** No match for quoted terms")
-                    continue
-                
-                st.write(f"🧬 **Processing UniProt {uniprot_entry['accession']}:** {uniprot_entry['protein_name']}")
-                
-                # Try to get nucleotide sequences from cross-references
-                cds_sequences = []
-                
-                for nucleotide_ref in uniprot_entry.get('nucleotide_refs', []):
-                    try:
-                        db_name = nucleotide_ref['database']
-                        nucleotide_id = nucleotide_ref['id']
-                        
-                        st.write(f"  🔗 **Checking {db_name} reference:** {nucleotide_id}")
-                        
-                        # Try to get nucleotide sequence
-                        if db_name == 'EMBL':
-                            nucleotide_seq = self.get_embl_sequence(nucleotide_id)
-                        elif db_name == 'RefSeq':
-                            nucleotide_seq = self.get_refseq_sequence(nucleotide_id)
-                        else:
-                            continue
-                        
-                        if nucleotide_seq:
-                            cds_info = {
-                                'accession': nucleotide_id,
-                                'protein_name': uniprot_entry['protein_name'],
-                                'gene_name': uniprot_entry['gene_names'],
-                                'product': uniprot_entry['protein_name'],
-                                'locus_tag': uniprot_entry['accession'],
-                                'start_position': 1,
-                                'end_position': len(nucleotide_seq),
-                                'header': f">{nucleotide_id} {uniprot_entry['protein_name']}",
-                                'sequence': nucleotide_seq,
-                                'length': len(nucleotide_seq),
-                                'url': f"https://www.ncbi.nlm.nih.gov/nuccore/{nucleotide_id}",
-                                'valid_dna': self.is_valid_dna_sequence(nucleotide_seq),
-                                'source_database': db_name,
-                                'uniprot_accession': uniprot_entry['accession']
-                            }
-                            cds_sequences.append(cds_info)
-                            st.write(f"    ✅ **Retrieved {db_name} sequence:** {len(nucleotide_seq)} bp")
-                        else:
-                            st.write(f"    ❌ **Failed to retrieve {db_name} sequence**")
-                        
-                        time.sleep(0.5)  # Rate limiting
-                        
-                    except Exception as e:
-                        st.write(f"    ❌ **Error processing {db_name} reference:** {str(e)}")
-                        continue
-                
-                # If we found nucleotide sequences, add this entry
-                if cds_sequences:
-                    sequences_with_cds.append({
-                        'accession': uniprot_entry['accession'],
-                        'title': uniprot_entry['protein_name'],
-                        'definition': f"{uniprot_entry['protein_name']} [{uniprot_entry['organism']}]",
-                        'organism': uniprot_entry['organism'],
-                        'length': max(cds['length'] for cds in cds_sequences),
-                        'url': uniprot_entry['uniprot_url'],
-                        'success': True,
-                        'cds_sequences': cds_sequences,
-                        'filtered_terms': quoted_terms or [],
-                        'source': 'UniProt'
-                    })
-                    st.write(f"  ✅ **Added {len(cds_sequences)} CDS sequences from UniProt entry**")
-                else:
-                    st.write(f"  ❌ **No nucleotide sequences found for UniProt entry**")
-                    
-            except Exception as e:
-                st.write(f"❌ **Error processing UniProt entry {uniprot_entry.get('accession', 'Unknown')}:** {str(e)}")
-                continue
-        
-        return sequences_with_cds
-    
-    def get_embl_sequence(self, embl_id: str) -> str:
-        """Get nucleotide sequence from EMBL database"""
-        try:
-            # Try NCBI E-utilities (EMBL records are often in NCBI)
-            urls = [
-                f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id={embl_id}&rettype=fasta&retmode=text",
-                f"https://www.ncbi.nlm.nih.gov/nuccore/{embl_id}?report=fasta&format=text"
-            ]
-            
-            for url in urls:
-                try:
-                    response = self.session.get(url, timeout=30)
-                    if response.status_code == 200 and response.text.startswith('>'):
-                        lines = response.text.strip().split('\n')
-                        sequence = ''.join(lines[1:]).upper()
-                        sequence = re.sub(r'[^ATGCN]', '', sequence)
-                        if sequence:
-                            return sequence
-                except Exception:
-                    continue
-            
-            return ""
-            
-        except Exception as e:
-            return ""
-    
-    def get_refseq_sequence(self, refseq_id: str) -> str:
-        """Get nucleotide sequence from RefSeq database"""
-        try:
-            # RefSeq is available through NCBI
-            urls = [
-                f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id={refseq_id}&rettype=fasta&retmode=text",
-                f"https://www.ncbi.nlm.nih.gov/nuccore/{refseq_id}?report=fasta&format=text"
-            ]
-            
-            for url in urls:
-                try:
-                    response = self.session.get(url, timeout=30)
-                    if response.status_code == 200 and response.text.startswith('>'):
-                        lines = response.text.strip().split('\n')
-                        sequence = ''.join(lines[1:]).upper()
-                        sequence = re.sub(r'[^ATGCN]', '', sequence)
-                        if sequence:
-                            return sequence
-                except Exception:
-                    continue
-            
-            return ""
-            
-        except Exception as e:
-            return ""
-    
-    def matches_quoted_terms_uniprot(self, uniprot_entry: Dict, quoted_terms: List[str]) -> bool:
-        """Check if a UniProt entry matches quoted terms"""
-        if not quoted_terms:
-            return True
-        
-        try:
-            searchable_fields = [
-                uniprot_entry.get('protein_name', '').lower(),
-                uniprot_entry.get('gene_names', '').lower(),
-                uniprot_entry.get('organism', '').lower(),
-                uniprot_entry.get('accession', '').lower()
-            ]
-            
-            for term in quoted_terms:
-                for field in searchable_fields:
-                    if field and term in field:
-                        return True
-            
-            return False
-            
-        except Exception:
-            return True
-    
-    def is_valid_dna_sequence(self, sequence: str) -> bool:
-        """Check if sequence contains only valid DNA bases"""
-        if not sequence:
-            return False
-        return all(base.upper() in 'ATGCN' for base in sequence)
-    
-    def extract_quoted_terms(self, query: str) -> List[str]:
-        """Extract terms in quotes from the search query"""
-        try:
-            quoted_terms = re.findall(r'"([^"]+)"', query)
-            if not quoted_terms:
-                quoted_terms = re.findall(r"'([^']+)'", query)
-            
-            cleaned_terms = []
-            for term in quoted_terms:
-                cleaned_term = term.strip().lower()
-                if cleaned_term:
-                    cleaned_terms.append(cleaned_term)
-            
-            return cleaned_terms
-            
-        except Exception as e:
-            st.write(f"❌ **Error extracting quoted terms:** {str(e)}")
-            return []
-    
-    def ai_select_best_sequences(self, query: str, sequences_with_cds: List[Dict]) -> List[Dict]:
-        """Use AI to select the most relevant sequences based on the query"""
-        if not self.anthropic or not sequences_with_cds:
-            return sequences_with_cds
-        
-        sequence_summaries = []
-        for i, seq_data in enumerate(sequences_with_cds):
-            cds_info = []
-            for cds in seq_data.get('cds_sequences', []):
-                cds_info.append(f"  - {cds.get('protein_name', 'Unknown')} ({cds.get('start_position', 0)}-{cds.get('end_position', 0)}, {cds.get('length', 0)} bp)")
-            
-            summary = f"""
-Sequence {i+1}:
-- Accession: {seq_data['accession']}
-- Title: {seq_data.get('title', 'N/A')}
-- Definition: {seq_data.get('definition', 'N/A')}
-- Organism: {seq_data.get('organism', 'N/A')}
-- Source: {seq_data.get('source', 'Unknown')}
-- Length: {seq_data.get('length', 0)} bp
-- CDS Count: {len(seq_data.get('cds_sequences', []))}
-- CDS Details:
-{chr(10).join(cds_info) if cds_info else '  - No CDS found'}
-"""
-            sequence_summaries.append(summary)
-        
-        context = "\n".join(sequence_summaries)
-        
-        prompt = f"""
-You are a bioinformatics expert. A user is searching for: "{query}"
-
-Below are the available sequences with their CDS information from both NCBI and UniProt databases:
-
-{context}
-
-Please analyze these sequences and rank them by relevance to the user's query. Consider:
-1. How well the organism/title matches the query
-2. The presence and quality of CDS sequences
-3. The biological relevance to the query
-4. The completeness of the sequence data
-5. The source database (NCBI vs UniProt)
-
-Return your response as a JSON list of accession numbers in order of relevance (most relevant first), with a brief explanation for each.
-
-Format: {{"rankings": [{{"accession": "XXX", "rank": 1, "reason": "explanation"}}, ...]}}
-"""
-
-        try:
-            message = self.anthropic.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=1000,
-                temperature=0.3,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            
-            response_text = message.content[0].text
-            
-            import json
-            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-            if json_match:
-                rankings_data = json.loads(json_match.group())
-                rankings = rankings_data.get('rankings', [])
-                
-                ordered_sequences = []
-                for ranking in rankings:
-                    accession = ranking['accession']
-                    for seq_data in sequences_with_cds:
-                        if seq_data['accession'] == accession:
-                            seq_data['ai_rank'] = ranking['rank']
-                            seq_data['ai_reason'] = ranking['reason']
-                            ordered_sequences.append(seq_data)
-                            break
-                
-                ranked_accessions = [r['accession'] for r in rankings]
-                for seq_data in sequences_with_cds:
-                    if seq_data['accession'] not in ranked_accessions:
-                        ordered_sequences.append(seq_data)
-                
-                return ordered_sequences
-            
-        except Exception as e:
-            logger.error(f"Error in AI ranking: {e}")
-        
-        return sequences_with_cds
-    
-    def create_cds_download_data(self, sequences_with_cds: List[Dict]) -> pd.DataFrame:
-        """Create downloadable DataFrame with CDS sequences"""
-        download_data = []
-        
-        for seq_data in sequences_with_cds:
-            base_info = {
-                'Source_Database': seq_data.get('source', 'Unknown'),
-                'Accession': seq_data.get('accession', ''),
-                'Title': seq_data.get('title', ''),
-                'Definition': seq_data.get('definition', ''),
-                'Organism': seq_data.get('organism', ''),
-                'Sequence_Length_bp': seq_data.get('length', 0),
-                'Database_URL': seq_data.get('url', ''),
-                'Filtered_Terms': ', '.join(seq_data.get('filtered_terms', [])),
-                'AI_Rank': seq_data.get('ai_rank', ''),
-                'AI_Reason': seq_data.get('ai_reason', '')
-            }
-            
-            if seq_data.get('cds_sequences'):
-                for i, cds in enumerate(seq_data['cds_sequences']):
-                    row = base_info.copy()
-                    row.update({
-                        'CDS_Number': i + 1,
-                        'Gene_Name': cds.get('gene_name', ''),
-                        'Protein_Name': cds.get('protein_name', ''),
-                        'Product': cds.get('product', ''),
-                        'Locus_Tag': cds.get('locus_tag', ''),
-                        'Start_Position': cds.get('start_position', 0),
-                        'End_Position': cds.get('end_position', 0),
-                        'CDS_Header': cds.get('header', ''),
-                        'CDS_Sequence': cds.get('sequence', ''),
-                        'CDS_Length_bp': cds.get('length', 0),
-                        'Valid_DNA': cds.get('valid_dna', False),
-                        'Nucleotide_URL': cds.get('url', ''),
-                        'Source_DB': cds.get('source_database', ''),
-                        'UniProt_Accession': cds.get('uniprot_accession', '')
-                    })
-                    download_data.append(row)
-            else:
-                row = base_info.copy()
-                row.update({
-                    'CDS_Number': 0,
-                    'Gene_Name': 'No matching CDS found',
-                    'Protein_Name': 'No matching CDS found',
-                    'Product': '',
-                    'Locus_Tag': '',
-                    'Start_Position': 0,
-                    'End_Position': 0,
-                    'CDS_Header': '',
-                    'CDS_Sequence': '',
-                    'CDS_Length_bp': 0,
-                    'Valid_DNA': False,
-                    'Nucleotide_URL': '',
-                    'Source_DB': '',
-                    'UniProt_Accession': ''
-                })
-                download_data.append(row)
-        
-        return pd.DataFrame(download_data)
 def load_codon_data_from_file(file_content):
     """Load codon usage data from uploaded file"""
     try:
@@ -3280,52 +1734,6 @@ def load_codon_data_from_file(file_content):
     except Exception as e:
         raise Exception(f"Error loading codon file: {e}")
 
-def test_serper_connection(api_key: str) -> Dict:
-    """Test SERPER API connection with a simple search"""
-    try:
-        url = "https://google.serper.dev/search"
-        payload = {"q": "test", "num": 1}
-        headers = {'X-API-KEY': api_key, 'Content-Type': 'application/json'}
-        
-        response = requests.post(url, json=payload, headers=headers, timeout=10)
-        
-        if response.status_code == 200:
-            return {"success": True, "message": "Connection successful"}
-        elif response.status_code == 403:
-            return {"success": False, "error": "Invalid API key or insufficient permissions"}
-        else:
-            return {"success": False, "error": f"HTTP {response.status_code}: {response.text}"}
-            
-    except requests.exceptions.ConnectionError as e:
-        return {"success": False, "error": "Connection error - unable to reach google.serper.dev"}
-    except requests.exceptions.Timeout as e:
-        return {"success": False, "error": "Connection timeout"}
-    except Exception as e:
-        return {"success": False, "error": f"Unexpected error: {str(e)}"}
-
-def test_uniprot_connection() -> Dict:
-    """Test UniProt API connection"""
-    try:
-        url = "https://rest.uniprot.org/uniprotkb/search"
-        params = {"query": "insulin", "format": "json", "size": 1}
-        
-        response = requests.get(url, params=params, timeout=10)
-        
-        if response.status_code == 200:
-            data = response.json()
-            if 'results' in data:
-                return {"success": True, "message": "UniProt connection successful"}
-            else:
-                return {"success": False, "error": "Unexpected response format"}
-        else:
-            return {"success": False, "error": f"HTTP {response.status_code}: {response.text}"}
-            
-    except requests.exceptions.ConnectionError as e:
-        return {"success": False, "error": "Connection error - unable to reach UniProt API"}
-    except requests.exceptions.Timeout as e:
-        return {"success": False, "error": "Connection timeout"}
-    except Exception as e:
-        return {"success": False, "error": f"Unexpected error: {str(e)}"}
 
 def create_download_link(df, filename):
     """Create download link for DataFrame as Excel"""
@@ -3335,430 +1743,7 @@ def create_download_link(df, filename):
     processed_data = output.getvalue()
     return processed_data
 
-def run_terminal_maxstop(dna_seq):
-    """
-    A self-contained implementation of the user's terminal script logic for MaxStop.
-    This uses its own BioPython-derived codon table and is completely isolated
-    from the Streamlit app's session state and codon files for debugging.
-    """
-    # 1. Imports and Data setup (local to this function)
-    from collections import defaultdict
-    from Bio.Seq import Seq
-    from Bio.Data import CodonTable
 
-    standard_table = CodonTable.unambiguous_dna_by_id[1]
-    synonymous_codons = defaultdict(list)
-    for codon, aa in standard_table.forward_table.items():
-        synonymous_codons[aa].append(codon)
-    for stop in standard_table.stop_codons:
-        synonymous_codons["*"].append(stop)
-
-    # 2. The user's optimization function (renamed to avoid conflicts)
-    def terminal_stop_codon_optimisation(seq_to_optimize):
-        seq_to_optimize = seq_to_optimize.upper().replace("\n", "").replace(" ", "")
-        original_seq_obj = Seq(seq_to_optimize)
-        protein = original_seq_obj.translate(to_stop=False)
-
-        optimised_seq = ""
-        i = 0
-        while i < len(seq_to_optimize) - 2:
-            codon = seq_to_optimize[i:i+3]
-            try:
-                aa_seq = Seq(codon).translate()
-                aa = str(aa_seq)
-            except Exception:
-                optimised_seq += codon
-                i += 3
-                continue
-
-            # This check is buggy, but we keep it to match the terminal script
-            if i < len(seq_to_optimize) - 5:
-                codon2 = seq_to_optimize[i+3:i+6]
-                try:
-                    aa2_seq = Seq(codon2).translate()
-                    aa2 = str(aa2_seq)
-                    double_subs = [
-                        (c1, c2) for c1 in synonymous_codons[aa]
-                                 for c2 in synonymous_codons[aa2]
-                                 if (c1 + c2)[1:7] in {"TAATAA", "TAGTAG"}
-                    ]
-                    if double_subs:
-                        best_c1, best_c2 = double_subs[0]
-                        optimised_seq += best_c1 + best_c2
-                        i += 6
-                        continue
-                except Exception:
-                    pass
-
-            best_codon = codon
-            for syn in synonymous_codons[aa]:
-                temp_seq = optimised_seq + syn + seq_to_optimize[i+3:]
-                plus1 = temp_seq[1:]
-                codon_in_plus1 = plus1[i:i+3]
-                if codon_in_plus1 in {"TAA", "TAG"}:
-                    best_codon = syn
-                    break
-            optimised_seq += best_codon
-            i += 3
-        
-        if i < len(seq_to_optimize):
-            optimised_seq += seq_to_optimize[i:]
-
-        try:
-            final_protein = Seq(optimised_seq).translate(to_stop=False)
-            assert str(final_protein) == str(protein)
-        except AssertionError:
-            try:
-                logger.error("Protein sequence changed during isolated MaxStop. Reverting.")
-            except NameError:
-                print("ERROR: Protein sequence changed during isolated MaxStop. Reverting.")
-            return seq_to_optimize
-        return optimised_seq
-
-    # 3. Run the logic
-    optimised_dna = terminal_stop_codon_optimisation(dna_seq)
-
-    # Save the correct result directly to session state to bypass any state corruption issues
-    st.session_state['maxstop_result_seq'] = optimised_dna
-    
-    return optimised_dna
-
-def nc_stop_codon_optimisation(dna_seq, codon_table=NC_synonymous_codons):
-    """
-    MaxStop NC stop codon optimisation for Streamlit.
-    Optimized for consistency using defined global codon tables.
-    """
-    dna_seq = dna_seq.upper().replace("\n", "").replace(" ", "")
-    
-    # Use Biopython's translation for the original protein sequence
-    original_seq = Seq(dna_seq)
-    protein = original_seq.translate(to_stop=False)
-
-    optimised_seq = ""
-    i = 0
-    while i < len(dna_seq) - 2:
-        codon = dna_seq[i:i+3]
-        
-        # Determine the AA using the STANDARD_GENETIC_CODE map for consistency
-        # Fallback to '*' for stop codons/errors, though the main translation should catch this
-        aa = STANDARD_GENETIC_CODE.get(codon, str(Seq(codon).translate()))
-
-        # --- Check for consecutive stop codon motifs ---
-        if i < len(dna_seq) - 5:
-            codon2 = dna_seq[i+3:i+6]
-            aa2 = STANDARD_GENETIC_CODE.get(codon2, str(Seq(codon2).translate()))
-            
-            # Use the provided codon_table (defaulting to NC_synonymous_codons)
-            syns1 = codon_table.get(aa, [])
-            syns2 = codon_table.get(aa2, [])
-
-            double_subs = [
-                (c1, c2) for c1 in syns1
-                         for c2 in syns2
-                         # Check for +1 frame stop codon motifs (TAATAA, TAGTAG)
-                         if (c1 + c2)[1:7] in {"TAATAA", "TAGTAG"}
-            ]
-            
-            if double_subs:
-                best_c1, best_c2 = double_subs[0]
-                optimised_seq += best_c1 + best_c2
-                i += 6
-                continue
-
-        # --- Check for single +1 stop codon bias ---
-        best_codon = codon
-        synonyms = codon_table.get(aa, [])
-        
-        for syn in synonyms:
-            # Construct a temporary sequence for the +1 frame check
-            temp_seq = optimised_seq + syn + dna_seq[i+3:]
-            
-            # Get the +1 reading frame (starting from the second base)
-            plus1 = temp_seq[1:]
-            
-            # Get the codon in the +1 frame at the current position 'i'
-            codon_in_plus1 = plus1[i:i+3]
-            
-            # The logic: use the first synonym found that *creates* a TAA or TAG in the +1 frame
-            if codon_in_plus1 in {"TAA", "TAG"}:
-                best_codon = syn
-                break
-
-        optimised_seq += best_codon
-        i += 3
-
-    # --- Verify protein unchanged (Crucial Check) ---
-    final_protein = Seq(optimised_seq).translate(to_stop=False)
-    assert str(final_protein) == str(protein), "Protein sequence changed! Check AA translation logic."
-
-    return optimised_seq
-
-def isolated_maxstop_from_terminal(dna_seq_input):
-    """
-    A completely isolated, copy-pasted version of the user's terminal script.
-    All variables and functions are local to this scope to prevent any clashes.
-    It takes a DNA sequence and returns the optimized version.
-    """
-    # --- Start of user's copy-pasted code ---
-    from collections import defaultdict
-    from Bio.Seq import Seq
-    from Bio.Data import CodonTable
-
-    # Renamed to avoid global clashes
-    terminal_standard_table = CodonTable.unambiguous_dna_by_id[1]
-    terminal_synonymous_codons = defaultdict(list)
-    for codon, aa in terminal_standard_table.forward_table.items():
-        terminal_synonymous_codons[aa].append(codon)
-    for stop in terminal_standard_table.stop_codons:
-        terminal_synonymous_codons["*"].append(stop)
-
-    # Renamed to avoid global clashes
-    def terminal_stop_codon_optimisation(dna_seq):
-        dna_seq = dna_seq.upper()
-        original_seq = Seq(dna_seq)
-        protein = original_seq.translate(to_stop=False)
-
-        optimised_seq = ""
-        i = 0
-        while i < len(dna_seq) - 2:
-            codon = dna_seq[i:i+3]
-            try:
-                aa = str(Seq(codon).translate())
-            except Exception:
-                optimised_seq += codon
-                i += 3
-                continue
-            
-            # consecutive stop codons (buggy, but preserved)
-            if i < len(dna_seq) - 5:
-                codon2 = dna_seq[i+3:i+6]
-                try:
-                    aa2 = str(Seq(codon2).translate())
-                    double_subs = [
-                        (c1, c2) for c1 in terminal_synonymous_codons[aa]
-                                 for c2 in terminal_synonymous_codons[aa2]
-                                 if (c1 + c2)[1:7] in {"TAATAA", "TAGTAG"}
-                    ]
-                    if double_subs:
-                        best_c1, best_c2 = double_subs[0]
-                        optimised_seq += best_c1 + best_c2
-                        i += 6
-                        continue
-                except Exception:
-                    pass
-
-            # single stop codon addition; bias for UAA and UAG
-            best_codon = codon
-            for syn in terminal_synonymous_codons[aa]:
-                temp_seq = optimised_seq + syn + dna_seq[i+3:]
-                plus1 = temp_seq[1:]
-                codon_in_plus1 = plus1[i:i+3]
-                if codon_in_plus1 in {"TAA", "TAG"}:
-                    best_codon = syn
-                    break
-            optimised_seq += best_codon
-            i += 3
-
-        if i < len(dna_seq):
-            optimised_seq += dna_seq[i:]
-
-        # ensures aa composition is the unchanged
-        try:
-            final_protein = Seq(optimised_seq).translate(to_stop=False)
-            assert str(final_protein) == str(protein)
-        except AssertionError:
-            # This part is not in the user's script, but good practice for the app
-            return dna_seq
-
-        return optimised_seq
-
-    # The user's script uses a hardcoded DNA string.
-    # We will use the sequence passed into this function instead.
-    optimised_dna = terminal_stop_codon_optimisation(dna_seq_input)
-    # --- End of user's copy-pasted code ---
-    
-    # Save the correct result directly to session state to bypass any state corruption issues
-    st.session_state['maxstop_result_seq'] = optimised_dna
-    
-    return optimised_dna
-
-def isolated_maxstop_from_terminal(dna_seq_input):
-    """
-    A completely isolated, copy-pasted version of the user's terminal script.
-    All variables and functions are local to this scope to prevent any clashes.
-    It takes a DNA sequence and returns the optimized version.
-    """
-    # --- Start of user's copy-pasted code ---
-    from collections import defaultdict
-    from Bio.Seq import Seq
-    from Bio.Data import CodonTable
-
-    # Renamed to avoid global clashes
-    terminal_standard_table = CodonTable.unambiguous_dna_by_id[1]
-    terminal_synonymous_codons = defaultdict(list)
-    for codon, aa in terminal_standard_table.forward_table.items():
-        terminal_synonymous_codons[aa].append(codon)
-    for stop in terminal_standard_table.stop_codons:
-        terminal_synonymous_codons["*"].append(stop)
-
-    # Renamed to avoid global clashes
-    def terminal_stop_codon_optimisation(dna_seq):
-        dna_seq = dna_seq.upper()
-        original_seq = Seq(dna_seq)
-        protein = original_seq.translate(to_stop=False)
-
-        optimised_seq = ""
-        i = 0
-        while i < len(dna_seq) - 2:
-            codon = dna_seq[i:i+3]
-            try:
-                aa = str(Seq(codon).translate())
-            except Exception:
-                optimised_seq += codon
-                i += 3
-                continue
-            
-            # consecutive stop codons (buggy, but preserved)
-            if i < len(dna_seq) - 5:
-                codon2 = dna_seq[i+3:i+6]
-                try:
-                    aa2 = str(Seq(codon2).translate())
-                    double_subs = [
-                        (c1, c2) for c1 in terminal_synonymous_codons[aa]
-                                 for c2 in terminal_synonymous_codons[aa2]
-                                 if (c1 + c2)[1:7] in {"TAATAA", "TAGTAG"}
-                    ]
-                    if double_subs:
-                        best_c1, best_c2 = double_subs[0]
-                        optimised_seq += best_c1 + best_c2
-                        i += 6
-                        continue
-                except Exception:
-                    pass
-
-            # single stop codon addition; bias for UAA and UAG
-            best_codon = codon
-            for syn in terminal_synonymous_codons[aa]:
-                temp_seq = optimised_seq + syn + dna_seq[i+3:]
-                plus1 = temp_seq[1:]
-                codon_in_plus1 = plus1[i:i+3]
-                if codon_in_plus1 in {"TAA", "TAG"}:
-                    best_codon = syn
-                    break
-            optimised_seq += best_codon
-            i += 3
-
-        if i < len(dna_seq):
-            optimised_seq += dna_seq[i:]
-
-        # ensures aa composition is the unchanged
-        try:
-            final_protein = Seq(optimised_seq).translate(to_stop=False)
-            assert str(final_protein) == str(protein)
-        except AssertionError:
-            # This part is not in the user's script, but good practice for the app
-            return dna_seq
-
-        return optimised_seq
-
-    # The user's script uses a hardcoded DNA string.
-    # We will use the sequence passed into this function instead.
-    optimised_dna = terminal_stop_codon_optimisation(dna_seq_input)
-    # --- End of user's copy-pasted code ---
-    
-    # Save the correct result directly to session state to bypass any state corruption issues
-    st.session_state['maxstop_result_seq'] = optimised_dna
-    
-    return optimised_dna
-
-def isolated_maxstop_from_terminal(dna_seq_input):
-    """
-    A completely isolated, copy-pasted version of the user's terminal script.
-    All variables and functions are local to this scope to prevent any clashes.
-    It takes a DNA sequence and returns the optimized version.
-    """
-    # --- Start of user's copy-pasted code ---
-    from collections import defaultdict
-    from Bio.Seq import Seq
-    from Bio.Data import CodonTable
-
-    # Renamed to avoid global clashes
-    terminal_standard_table = CodonTable.unambiguous_dna_by_id[1]
-    terminal_synonymous_codons = defaultdict(list)
-    for codon, aa in terminal_standard_table.forward_table.items():
-        terminal_synonymous_codons[aa].append(codon)
-    for stop in terminal_standard_table.stop_codons:
-        terminal_synonymous_codons["*"].append(stop)
-
-    # Renamed to avoid global clashes
-    def terminal_stop_codon_optimisation(dna_seq):
-        dna_seq = dna_seq.upper()
-        original_seq = Seq(dna_seq)
-        protein = original_seq.translate(to_stop=False)
-
-        optimised_seq = ""
-        i = 0
-        while i < len(dna_seq) - 2:
-            codon = dna_seq[i:i+3]
-            try:
-                aa = str(Seq(codon).translate())
-            except Exception:
-                optimised_seq += codon
-                i += 3
-                continue
-            
-            # consecutive stop codons (buggy, but preserved)
-            if i < len(dna_seq) - 5:
-                codon2 = dna_seq[i+3:i+6]
-                try:
-                    aa2 = str(Seq(codon2).translate())
-                    double_subs = [
-                        (c1, c2) for c1 in terminal_synonymous_codons[aa]
-                                 for c2 in terminal_synonymous_codons[aa2]
-                                 if (c1 + c2)[1:7] in {"TAATAA", "TAGTAG"}
-                    ]
-                    if double_subs:
-                        best_c1, best_c2 = double_subs[0]
-                        optimised_seq += best_c1 + best_c2
-                        i += 6
-                        continue
-                except Exception:
-                    pass
-
-            # single stop codon addition; bias for UAA and UAG
-            best_codon = codon
-            for syn in terminal_synonymous_codons[aa]:
-                temp_seq = optimised_seq + syn + dna_seq[i+3:]
-                plus1 = temp_seq[1:]
-                codon_in_plus1 = plus1[i:i+3]
-                if codon_in_plus1 in {"TAA", "TAG"}:
-                    best_codon = syn
-                    break
-            optimised_seq += best_codon
-            i += 3
-
-        if i < len(dna_seq):
-            optimised_seq += dna_seq[i:]
-
-        # ensures aa composition is the unchanged
-        try:
-            final_protein = Seq(optimised_seq).translate(to_stop=False)
-            assert str(final_protein) == str(protein)
-        except AssertionError:
-            # This part is not in the user's script, but good practice for the app
-            return dna_seq
-
-        return optimised_seq
-
-    # The user's script uses a hardcoded DNA string.
-    # We will use the sequence passed into this function instead.
-    optimised_dna = terminal_stop_codon_optimisation(dna_seq_input)
-    # --- End of user's copy-pasted code ---
-    
-    # Save the correct result directly to session state to bypass any state corruption issues
-    st.session_state['maxstop_result_seq'] = optimised_dna
-    
-    return optimised_dna
 
 def run_single_optimization(sequence, method, bias_weight=None):
     """Run single sequence optimization"""
@@ -3801,7 +1786,6 @@ def run_single_optimization(sequence, method, bias_weight=None):
                 'Method': method
             }
         elif method == "MaxStop":
-            # Clear any previous result from the session state before running
             if 'maxstop_result_seq' in st.session_state:
                 del st.session_state['maxstop_result_seq']
             optimized = isolated_maxstop_from_terminal(clean_seq)
@@ -3933,26 +1917,12 @@ def create_immunogenic_peptide_summary(findings_plus1, findings_minus1):
 def main():
     """Main Streamlit application"""
 
-    # Callback for applying CDS from search to mRNA design tab
-    def apply_cds_callback():
-        if 'temp_selected_cds_for_apply' in st.session_state:
-            selected_cds = st.session_state.temp_selected_cds_for_apply
-            st.session_state.mrna_design_cds_paste = selected_cds.get('sequence', '')
-            st.session_state.mrna_cds_input_method = "Paste Sequence"
-            st.session_state.show_apply_success_message = True
-            st.session_state.applied_cds_name = selected_cds.get('gene_name', 'Unknown')
-            if 'temp_selected_cds_for_apply' in st.session_state:
-                del st.session_state.temp_selected_cds_for_apply
-
+  
     # Apply the selected theme CSS
     inject_app_theme()
     # Initialize research engines
     
-    if 'ncbi_engine' not in st.session_state:
-        st.session_state.ncbi_engine = NCBISearchEngine()
-    if 'uniprot_engine' not in st.session_state:
-        st.session_state.uniprot_engine = UniProtSearchEngine()
-        
+
     st.title("🐎 Harmonized Optimization of Oligos and Frames")
     st.markdown("Welcome to HOOF: your optimization and analysis companion!")
 
@@ -3992,11 +1962,9 @@ def main():
         st.subheader("Codon Usage Selection")
         
         if available_files:
-            # Initialize current selection if not exists
             if 'selected_codon_file' not in st.session_state:
                 st.session_state.selected_codon_file = list(available_files.keys())[0]  # First available
             
-            # Make sure current selection is still available
             if st.session_state.selected_codon_file not in available_files:
                 st.session_state.selected_codon_file = list(available_files.keys())[0]
             
@@ -4007,10 +1975,8 @@ def main():
                 key="codon_species_selector"
             )
             
-            # Check if selection changed
             if selected_codon_species != st.session_state.selected_codon_file:
                 st.session_state.selected_codon_file = selected_codon_species
-                # Clear existing codon data to force reload
                 st.session_state.genetic_code = {}
                 st.session_state.codon_weights = {}
                 st.session_state.preferred_codons = {}
@@ -4121,19 +2087,20 @@ def main():
         
         st.divider()
         
-        # Algorithm settings
         st.subheader("Algorithm Settings")
+
         bias_weight = st.slider(
             "Bias Weight (Balanced Optimization)", 
-            min_value=0.01, 
+            min_value=0.0, 
             max_value=1.0, 
             value=float(st.session_state.config.get("bias_weight", BIAS_WEIGHT_DEFAULT)),
-            step=0.1,
+            step=0.01,  # smaller step for finer control
             help="Weight for +1 frame stop codon bias in balanced optimization"
         )
+
         st.session_state.config["bias_weight"] = bias_weight
-        
         st.divider()
+
         
         # Theme selection
         st.subheader("Appearance")
@@ -4542,7 +2509,6 @@ def main():
                                 display_copyable_sequence(optimized_seq, "Optimized Sequence", "opt") # Use the consistent variable
                             
                         else:
-                            # For methods without optimization (like pure analysis)
                             result_data = []
                             for key, value in result.items():
                                 if key != 'Method':
@@ -4847,7 +2813,6 @@ def main():
                             
                             # Display results
                             if cai_sequences:
-                                # Display all In-Frame interactive graphs
                                 # Display all In-Frame interactive graphs
                                 colors = get_consistent_color_palette(len(cai_sequences), "analysis")
                                 for i, selected_data in enumerate(cai_sequences):
